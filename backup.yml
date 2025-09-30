@@ -1,0 +1,276 @@
+---
+- name: Automate Switchport Mapping (Read-Only)
+  hosts: network_devices
+  gather_facts: no
+  vars:
+    input_ip: "{{ ip_address | default('') }}" # From AAP survey
+    input_mac: "{{ mac_address | default('') }}" # From AAP survey
+    location: "{{ device_location | default('office') }}" # From AAP survey
+  tasks:
+    - name: Determine device vendor from inventory
+      set_fact:
+        vendor: "{{ ansible_network_os }}"
+      ignore_errors: yes
+
+    - name: Debug vendor detection
+      ansible.builtin.debug:
+        msg: "Detected vendor: {{ vendor }} for host {{ inventory_hostname }}"
+
+    - name: Verify MAC from IP if provided (Cisco Example) - Ping
+      cisco.ios.ios_command:
+        commands:
+          - ping {{ input_ip }}
+      register: ping_result
+      when: vendor == 'cisco.ios.ios' and input_ip != '' and input_mac == ''
+      ignore_errors: yes
+
+    - name: Verify MAC from IP if provided (Cisco Example) - ARP
+      cisco.ios.ios_command:
+        commands:
+          - show arp | include {{ input_ip }}
+      register: arp_result
+      when: vendor == 'cisco.ios.ios' and input_ip != '' and input_mac == ''
+      ignore_errors: yes
+
+    - name: Debug ARP result (Cisco)
+      ansible.builtin.debug:
+        msg: "ARP Result for Cisco: {{ arp_result.stdout_lines | default('No ARP data retrieved') }}"
+      when: vendor == 'cisco.ios.ios'
+
+    - name: Verify MAC from IP if provided (H3C Example) - Ping
+      h3c_open.comware.comware_command:
+        command: "ping {{ input_ip }}"
+      register: ping_result
+      when: vendor == 'h3c_open.comware.comware' and input_ip != '' and input_mac == ''
+      ignore_errors: yes
+
+    - name: Verify MAC from IP if provided (H3C Example) - ARP
+      h3c_open.comware.comware_command:
+        command: "display arp | include {{ input_ip }}"
+      register: arp_result
+      when: vendor == 'h3c_open.comware.comware' and input_ip != '' and input_mac == ''
+      ignore_errors: yes
+
+    - name: Debug ARP result (H3C)
+      ansible.builtin.debug:
+        msg: "ARP Result for H3C: {{ arp_result.stdout | default('No ARP data retrieved') }}"
+      when: vendor == 'h3c_open.comware.comware'
+
+    - name: Verify MAC from IP if provided (Huawei Example) - Ping
+      community.network.ce_command:
+        commands:
+          - "ping {{ input_ip }}"
+      register: ping_result
+      when: vendor == 'community.network.ce' and input_ip != '' and input_mac == ''
+      ignore_errors: yes
+
+    - name: Verify MAC from IP if provided (Huawei Example) - ARP
+      community.network.ce_command:
+        commands:
+          - "display arp | include {{ input_ip }}"
+      register: arp_result
+      when: vendor == 'community.network.ce' and input_ip != '' and input_mac == ''
+      ignore_errors: yes
+
+    - name: Debug ARP result (Huawei)
+      ansible.builtin.debug:
+        msg: "ARP Result for Huawei: {{ arp_result.stdout | default('No ARP data retrieved') }}"
+      when: vendor == 'community.network.ce'
+
+    - name: Set ARP MAC index based on vendor
+      set_fact:
+        arp_mac_index: "{{ {'cisco.ios.ios': 3, 'h3c_open.comware.comware': 1, 'community.network.ce': 1}[vendor] if vendor is defined else 'Not set' }}"
+      ignore_errors: yes
+
+    - name: Debug ARP MAC index
+      ansible.builtin.debug:
+        msg: "ARP MAC index: {{ arp_mac_index }} for vendor {{ vendor }}"
+
+    - name: Parse ARP lines
+      set_fact:
+        arp_lines: "{{ arp_result.stdout[0].splitlines() | default([]) if arp_result is defined and 'stdout' in arp_result and arp_result.stdout | length > 0 else [] }}"
+
+    - name: Find matching ARP line
+      set_fact:
+        matching_arp_line: "{{ arp_lines | select('search', input_ip) | reject('match', '^-+$|^IP ADDRESS|^Total|^ARP Entry') | first | default('') }}"
+
+    - name: Set MAC fact
+      set_fact:
+        raw_target_mac: "{{ input_mac if input_mac != '' else (matching_arp_line.split() | default([]) )[arp_mac_index | int] | default('No MAC found') }}"
+      when: vendor is defined
+      ignore_errors: yes
+
+    - name: Normalize MAC format for vendor
+      set_fact:
+        target_mac: "{{ raw_target_mac | replace('.', '-') | replace(':', '-') | lower if vendor in ['h3c_open.comware.comware', 'community.network.ce'] else raw_target_mac | replace('-', '.') | replace(':', '.') | lower }}"
+      ignore_errors: yes
+
+    - name: Debug MAC fact
+      ansible.builtin.debug:
+        msg: "Target MAC: {{ target_mac }} for host {{ inventory_hostname }}"
+
+    - name: Set port index based on vendor
+      set_fact:
+        port_index: "{{ {'cisco.ios.ios': -1, 'h3c_open.comware.comware': 3, 'community.network.ce': 2}[vendor] if vendor is defined else 'Not set' }}"
+      ignore_errors: yes
+
+    - name: Debug port index
+      ansible.builtin.debug:
+        msg: "Port index: {{ port_index }} for vendor {{ vendor }}"
+
+    - name: Set default port
+      set_fact:
+        port: "No port found"
+
+    - name: Query MAC address table (Cisco)
+      cisco.ios.ios_command:
+        commands: show mac address-table | include {{ target_mac }}
+      register: mac_table
+      when: vendor == 'cisco.ios.ios' and target_mac != 'No MAC found'
+      ignore_errors: yes
+
+    - name: Debug MAC table (Cisco)
+      ansible.builtin.debug:
+        msg: "MAC Table for Cisco: {{ mac_table.stdout_lines | default('No MAC table data retrieved') }}"
+
+    - name: Query MAC address table (H3C)
+      h3c_open.comware.comware_command:
+        command: "display mac-address | include {{ target_mac }}"
+      register: mac_table
+      when: vendor == 'h3c_open.comware.comware' and target_mac != 'No MAC found'
+      ignore_errors: yes
+
+    - name: Debug MAC table (H3C)
+      ansible.builtin.debug:
+        msg: "MAC Table for H3C: {{ mac_table.stdout | default('No MAC table data retrieved') }}"
+
+    - name: Query MAC address table (Huawei)
+      community.network.ce_command:
+        commands:
+          - "display mac-address | include {{ target_mac }}"
+      register: mac_table
+      when: vendor == 'community.network.ce' and target_mac != 'No MAC found'
+      ignore_errors: yes
+
+    - name: Debug MAC table (Huawei)
+      ansible.builtin.debug:
+        msg: "MAC Table for Huawei: {{ mac_table.stdout | default('No MAC table data retrieved') }}"
+
+    - name: Parse MAC table lines
+      set_fact:
+        mac_lines: "{{ mac_table.stdout[0].splitlines() | default([]) if mac_table is defined and 'stdout' in mac_table and mac_table.stdout | length > 0 else [] }}"
+
+    - name: Find matching MAC table line
+      set_fact:
+        matching_mac_line: "{{ mac_lines | select('search', target_mac) | reject('match', '^-+$|^MAC Address|^Total|^Flags') | first | default('') }}"
+
+    - name: Extract port from MAC table
+      set_fact:
+        port: "{{ (matching_mac_line.split() | default([]) )[port_index | int] | default('No port found') }}"
+      when: matching_mac_line != ''
+      ignore_errors: yes
+
+    - name: Debug extracted port
+      ansible.builtin.debug:
+        msg: "Extracted port: {{ port | default('Undefined') }} for MAC {{ target_mac }}"
+      ignore_errors: yes
+
+    - name: Check if port is access port (Cisco)
+      cisco.ios.ios_command:
+        commands: show interfaces {{ port }} switchport
+      register: port_type
+      when: vendor == 'cisco.ios.ios' and port is defined and port != 'No port found' and port != '-'
+      ignore_errors: yes
+
+    - name: Debug port type (Cisco)
+      ansible.builtin.debug:
+        msg: "Port Type for Cisco: {{ port_type.stdout | default('No port type data retrieved') }}"
+
+    - name: Check if port is access port (H3C)
+      h3c_open.comware.comware_command:
+        command: "display current-configuration interface {{ port }}"
+      register: port_type
+      when: vendor == 'h3c_open.comware.comware' and port is defined and port != 'No port found' and port != '-'
+      ignore_errors: yes
+
+    - name: Debug port type (H3C)
+      ansible.builtin.debug:
+        msg: "Port Type for H3C: {{ port_type.stdout | default('No port type data retrieved') }}"
+
+    - name: Check if port is access port (Huawei)
+      community.network.ce_command:
+        commands:
+          - "display current-configuration interface {{ port }}"
+      register: port_type
+      when: vendor == 'community.network.ce' and port is defined and port != 'No port found' and port != '-'
+      ignore_errors: yes
+
+    - name: Debug port type (Huawei)
+      ansible.builtin.debug:
+        msg: "Port Type for Huawei: {{ port_type.stdout | default('No port type data retrieved') }}"
+
+    - name: Set default action
+      set_fact:
+        action: "No action determined"
+
+    - name: Simulate port action (Cisco) - Read-only
+      set_fact:
+        action: "{{ 'Shut/No Shut (simulated, no action taken)' if 'access' in (port_type.stdout[0] | default('') | lower) else 'Trunk, skipped (logged)' }}"
+      when: vendor == 'cisco.ios.ios' and port_type is defined and 'stdout' in port_type and port_type.stdout | length > 0
+      ignore_errors: yes
+
+    - name: Debug simulated port action (Cisco)
+      ansible.builtin.debug:
+        msg: "Simulated Action for Cisco: {{ action | default('No action determined') }}"
+
+    - name: Simulate port action (H3C) - Read-only
+      set_fact:
+        action: "{{ 'Shut/No Shut (simulated, no action taken)' if 'access' in (port_type.stdout | default('') | lower) else 'Trunk, skipped (logged)' }}"
+      when: vendor == 'h3c_open.comware.comware' and port_type is defined and port_type.stdout != ''
+      ignore_errors: yes
+
+    - name: Debug simulated port action (H3C)
+      ansible.builtin.debug:
+        msg: "Simulated Action for H3C: {{ action | default('No action determined') }}"
+
+    - name: Simulate port action (Huawei) - Read-only
+      set_fact:
+        action: "{{ 'Shut/No Shut (simulated, no action taken)' if 'access' in (port_type.stdout[0] | default('') | lower) else 'Trunk, skipped (logged)' }}"
+      when: vendor == 'community.network.ce' and port_type is defined and 'stdout' in port_type and port_type.stdout | length > 0
+      ignore_errors: yes
+
+    - name: Debug simulated port action (Huawei)
+      ansible.builtin.debug:
+        msg: "Simulated Action for Huawei: {{ action | default('No action determined') }}"
+
+    - name: Send email notification (simulation only, no actual send)
+      community.general.mail:
+        host: smtp.hkt.com
+        port: 25
+        subject: "Switchport Mapping Notification"
+        body: "Port {{ port }} on {{ inventory_hostname }} at {{ location }} mapped to MAC {{ target_mac }}. Simulated Action: {{ action | default('No action determined') }}."
+        to: admin@hkt.com
+        from: ansible@hkt.com
+      register: email_result
+      check_mode: yes  # Prevents actual email sending, simulates only
+      when: port is defined and port != 'No port found' and port != '-'
+      ignore_errors: yes
+
+    - name: Debug email simulation
+      ansible.builtin.debug:
+        msg: "Email simulation result: {{ email_result | default('No email sent') }}"
+
+    - name: Update job status
+      set_fact:
+        job_status: "{{ 'Port mapping completed successfully (read-only)' if port != 'No port found' else 'Port mapping failed (read-only)' }}"
+
+    - name: Debug job status
+      ansible.builtin.debug:
+        msg: "Job Status: {{ job_status }}"
+
+    - name: Debug input variables
+      ansible.builtin.debug:
+        msg:
+          - "Input IP: {{ input_ip }}"
+          - "Input MAC: {{ input_mac }}"
+          - "Location: {{ location }}"

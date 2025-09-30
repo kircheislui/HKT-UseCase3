@@ -1,0 +1,34 @@
+Network Configuration Drift Detection Report
+
+Summary:
+- Total devices checked: {{ total_devices }}
+- Devices with drift: {{ devices_with_drift }}
+- Devices remediated: {{ devices_remediated }}
+- Devices failed: {{ devices_failed }}
+
+{% if devices_with_drift > 0 %}
+Devices requiring attention:
+{% for result in drift_results %}
+{% if result.has_drift and not result.remediated %}
+- {{ result.hostname }}: Configuration drift detected
+{% endif %}
+{% endfor %}
+{% endif %}
+
+{% if remediated_devices %}
+Successfully remediated devices:
+{% for device in remediated_devices %}
+- {{ device }}
+{% endfor %}
+{% endif %}
+
+{% if failed_devices %}
+Failed devices:
+{% for device in failed_devices %}
+- {{ device.hostname }}: {{ device.error }}
+{% endfor %}
+{% endif %}
+
+For detailed information, please check the attached drift report.
+
+This is an automated message from the Network Automation Platform.

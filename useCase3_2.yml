@@ -1,0 +1,85 @@
+---
+- name: Automated Configuration Drift Detection and Remediation (Steps 1-4)
+  hosts: network_devices
+  gather_facts: false
+  connection: ansible.netcommon.network_cli
+  become: yes
+  become_method: ansible.netcommon.enable
+
+  vars:
+    backup_option: "{{ backup | default('yes') }}"  # From AAP survey (yes/no)
+    remediate_option: "{{ remediate | default('no') }}"  # From AAP survey (yes/no), not used yet
+    git_repo_path: "{{ git_repo_path | default('/path/to/git/repo') }}"  # From survey: Path to baseline configs in Git
+    device_location: "{{ device_location | default('office') }}"  # From survey
+
+  tasks:
+    # --- SET DEVICE-SPECIFIC COMMANDS ---
+    - name: Set device-specific commands
+      ansible.builtin.set_fact:
+        config_command: "{{ 'show running-config' if 'cisco.ios' in ansible_network_os else 'display current-configuration' }}"
+
+    - name: Set pagination disable command
+      ansible.builtin.set_fact:
+        pagination_cmd: "{{ 'terminal length 0' if 'cisco.ios' in ansible_network_os else 'screen-length disable' if 'h3c_open.comware' in ansible_network_os else 'screen-length 0 temporary' if 'ce' in ansible_network_os else '' }}"
+
+    - name: DEBUG - Show determined commands
+      ansible.builtin.debug:
+        msg:
+          - "Config command: {{ config_command }}"
+          - "Pagination command: {{ pagination_cmd }}"
+
+    # --- DISABLE PAGINATION ---
+    - name: Disable pagination on devices
+      ansible.netcommon.cli_command:
+        command: "{{ pagination_cmd }}"
+      when: pagination_cmd != ''
+      ignore_errors: yes  # In case not supported
+
+    # --- STEP 1: User selects devices, backup/remediation options via AAP ---
+    # Handled via AAP survey variables (backup_option, remediate_option, git_repo_path, etc.)
+    # No additional task needed; variables are already set.
+
+    # --- STEP 2: RETRIEVE RUNNING CONFIGS FROM DEVICES ---
+    - name: Retrieve running configuration
+      ansible.netcommon.cli_command:
+        command: "{{ config_command }}"
+      register: running_config
+
+    - name: DEBUG - Show running configuration
+      ansible.builtin.debug:
+        var: running_config.stdout_lines
+
+    # --- STEP 3: BACKUP LOCALLY WITH TIMESTAMPS IF SELECTED ---
+    - name: Backup config if selected
+      ansible.builtin.copy:
+        content: "{{ running_config.stdout }}"
+        dest: "/backups/{{ inventory_hostname }}_{{ ansible_date_time.iso8601 }}.cfg"
+      delegate_to: localhost
+      when: backup_option == 'yes'
+
+    - name: DEBUG - Backup status
+      ansible.builtin.debug:
+        msg: "Backup created for {{ inventory_hostname }} at {{ device_location }} with timestamp {{ ansible_date_time.iso8601 }}.cfg"
+      when: backup_option == 'yes'
+
+    # --- STEP 4: FETCH BASELINES FROM GIT ---
+    - name: Fetch baseline from Git
+      ansible.builtin.git:
+        repo: "{{ git_repo_path }}"
+        dest: "/tmp/baselines"
+        version: master
+      delegate_to: localhost
+
+    - name: Load baseline config
+      ansible.builtin.slurp:
+        src: "/tmp/baselines/{{ inventory_hostname }}.cfg"
+      register: baseline_config
+      delegate_to: localhost
+
+    - name: Set baseline config content
+      ansible.builtin.set_fact:
+        baseline_config_content: "{{ baseline_config.content | b64decode }}"
+
+    - name: DEBUG - Show baseline configuration
+      ansible.builtin.debug:
+        var: baseline_config_content

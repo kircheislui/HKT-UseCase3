@@ -1,0 +1,68 @@
+---
+- name: Calculate drift statistics
+  set_fact:
+    total_devices: "{{ drift_results | length }}"
+    devices_with_drift: "{{ drift_results | selectattr('has_drift', 'equalto', true) | list | length }}"
+    devices_remediated: "{{ remediated_devices | length }}"
+    devices_failed: "{{ failed_devices | length }}"
+    devices_backed_up: "{{ drift_results | selectattr('backup_created', 'equalto', true) | list | length }}"
+    devices_no_baseline: "{{ drift_results | selectattr('baseline_found', 'equalto', false) | list | length }}"
+
+- name: Generate detailed drift statistics by OS
+  set_fact:
+    drift_by_os: "{{ drift_by_os | default({}) | combine({item.network_os: (drift_by_os[item.network_os] | default([])) + [item]}) }}"
+  loop: "{{ drift_results }}"
+  delegate_to: localhost
+
+- name: Generate drift report
+  template:
+    src: drift_report.j2
+    dest: "/tmp/drift_report_{{ timestamp }}.txt"
+  delegate_to: localhost
+
+- name: Display summary
+  debug:
+    msg: |
+      Configuration Drift Detection Summary:
+      =====================================
+      - Total devices checked: {{ total_devices }}
+      - Devices with drift: {{ devices_with_drift }}
+      - Devices remediated: {{ devices_remediated }}
+      - Devices failed: {{ devices_failed }}
+      - Devices backed up: {{ devices_backed_up }}
+      - Devices without baseline: {{ devices_no_baseline }}
+      
+      By Network OS:
+      {% for os, devices in drift_by_os.items() %}
+      {{ os }}: {{ devices | length }} devices ({{ devices | selectattr('has_drift', 'equalto', true) | list | length }} with drift)
+      {% endfor %}
+
+- name: Create summary for email notification
+  set_fact:
+    email_summary: |
+      Configuration Drift Detection completed for {{ total_devices }} devices.
+      
+      Results:
+      - {{ devices_with_drift }} devices have configuration drift
+      - {{ devices_remediated }} devices were automatically remediated
+      - {{ devices_failed }} devices failed processing
+      - {{ devices_backed_up }} devices were backed up
+      
+      {% if devices_with_drift > 0 %}
+      Devices with drift:
+      {% for result in drift_results %}
+      {% if result.has_drift %}
+      - {{ result.hostname }} ({{ result.network_os }}): {{ result.drift_details.summary }}
+      {% endif %}
+      {% endfor %}
+      {% endif %}
+  delegate_to: localhost
+
+- name: Cleanup temporary files
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "/tmp/baseline_{{ inventory_hostname }}_{{ timestamp }}.cfg"
+  ignore_errors: yes
+  delegate_to: localhost

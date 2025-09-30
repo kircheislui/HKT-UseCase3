@@ -1,0 +1,41 @@
+---
+- name: Configuration Drift Detection and Remediation
+  hosts: network_devices
+  gather_facts: true
+  connection: ansible.netcommon.network_cli
+  become: yes
+  become_method: ansible.netcommon.enable
+
+  vars:
+    perform_backup: "{{ perform_backup | default('yes') }}"
+    perform_remediation: "{{ perform_remediation | default('no') }}"
+    backup_path: "/opt/ansible/backups"  # Fixed: removed recursive template
+    git_repo_url: "{{ git_repo_url }}"
+    git_repo_branch: "{{ git_repo_branch | default('main') }}"
+    git_backup_repo: "{{ git_backup_repo }}"  # New: separate repo for backups
+    git_backup_branch: "{{ git_backup_branch | default('main') }}"
+    email_enabled: "{{ email_enabled | default('yes') }}"
+    
+  pre_tasks:
+    - name: Set pagination disable command
+      ansible.builtin.set_fact:
+        pagination_cmd: "{{ 'terminal length 0' if 'cisco.ios' in ansible_network_os else 'screen-length disable' if 'h3c_open.comware' in ansible_network_os else 'screen-length 0 temporary' if 'ce' in ansible_network_os else '' }}"
+
+    # --- DISABLE PAGINATION ---
+    - name: Disable pagination on devices
+      ansible.netcommon.cli_command:
+        command: "{{ pagination_cmd }}"
+      when: pagination_cmd != ''
+      ignore_errors: yes  # In case not supported
+
+  roles:
+    - config_drift
+
+  post_tasks:
+    - name: Send drift report email
+      include_role:
+        name: email_notification
+      vars:
+        email_subject: "Network Configuration Drift Report - {{ timestamp }}"
+        email_template: "config_drift_report.j2"
+      when: email_enabled | bool

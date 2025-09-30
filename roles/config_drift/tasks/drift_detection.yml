@@ -1,0 +1,132 @@
+---
+- name: Debug network OS detection
+  debug:
+    msg: "Device: {{ inventory_hostname }}, Network OS: {{ ansible_network_os }}"
+
+- name: Normalize network OS for command lookup
+  set_fact:
+    normalized_network_os: "{{ ansible_network_os | regex_replace('.*\\.([^.]+)$', '\\1') }}"
+
+- name: Debug normalized network OS
+  debug:
+    msg: "Normalized Network OS: {{ normalized_network_os }}"
+
+- name: Get device running configuration
+  block:
+    - name: Retrieve running configuration
+      cli_command:
+        command: "{{ running_config_command[normalized_network_os] | default('show running-config') }}"
+      register: running_config
+      
+    - name: Create local backup of running configuration
+      copy:
+        content: "{{ running_config.stdout }}"
+        dest: "{{ backup_path }}/{{ backup_date }}/{{ inventory_hostname }}_{{ timestamp }}.cfg"
+      delegate_to: localhost
+      when: perform_backup | bool
+
+    - name: Determine baseline configuration for device
+      set_fact:
+        baseline_config: "{{ baseline_configs[baseline_key] | default('') }}"
+      vars:
+        # Map network OS to baseline file names
+        baseline_key: "{{ baseline_mapping[normalized_network_os] | default('') }}"
+
+    - name: Debug baseline selection
+      debug:
+        msg: |
+          Device: {{ inventory_hostname }}
+          Normalized OS: {{ normalized_network_os }}
+          Baseline key: {{ baseline_mapping[normalized_network_os] | default('not found') }}
+          Baseline found: {{ baseline_config | length > 0 }}
+
+    - name: Extract relevant sections from running config
+      set_fact:
+        running_config_sections: "{{ running_config.stdout | extract_config_sections(normalized_network_os) }}"
+      when: baseline_config | length > 0
+
+    - name: Normalize baseline configuration
+      set_fact:
+        baseline_config_normalized: "{{ baseline_config | normalize_config(normalized_network_os) }}"
+        running_config_normalized: "{{ running_config_sections | normalize_config(normalized_network_os) }}"
+      when: baseline_config | length > 0
+
+    - name: Debug - Show full running config
+      debug:
+        var: running_config.stdout
+      when: baseline_config | length > 0
+
+    - name: Debug - Show extracted sections  
+      debug:
+        var: running_config_sections
+      when: baseline_config | length > 0
+
+    - name: Debug - Show normalized config lines
+      debug:
+        var: running_config_normalized  
+      when: baseline_config | length > 0
+
+    - name: Compare configurations section by section
+      set_fact:
+        drift_analysis: "{{ running_config_normalized | compare_with_baseline(baseline_config_normalized, normalized_network_os) }}"
+        has_drift: "{{ (running_config_normalized | compare_with_baseline(baseline_config_normalized, normalized_network_os)).has_differences }}"
+      when: baseline_config | length > 0
+
+    - name: Set no drift when no baseline available
+      set_fact:
+        drift_analysis: 
+          has_differences: false
+          missing_configs: []
+          extra_configs: []
+          different_configs: []
+          summary: "No baseline configuration available for {{ inventory_hostname }}"
+        has_drift: false
+      when: baseline_config | default('') | length == 0
+
+    - name: Record drift results
+      set_fact:
+        drift_results: "{{ drift_results + [drift_record] }}"
+      vars:
+        drift_record:
+          hostname: "{{ inventory_hostname }}"
+          network_os: "{{ normalized_network_os }}"
+          has_drift: "{{ has_drift | default(false) }}"
+          drift_details: "{{ drift_analysis }}"
+          remediated: false
+          error: null
+          backup_created: "{{ perform_backup | bool }}"
+          baseline_found: "{{ baseline_config | default('') | length > 0 }}"
+      delegate_to: localhost
+
+    - name: Display drift status
+      debug:
+        msg: |
+          Device: {{ inventory_hostname }} ({{ normalized_network_os }})
+          Baseline found: {{ baseline_config | default('') | length > 0 }}
+          Has drift: {{ has_drift | default(false) }}
+          {% if has_drift %}
+          Missing configurations: {{ drift_analysis.missing_configs | length }}
+          Extra configurations: {{ drift_analysis.extra_configs | length }}
+          Different configurations: {{ drift_analysis.different_configs | length }}
+          {% endif %}
+
+    - name: Perform remediation if requested and drift detected
+      include_tasks: remediate_config.yml
+      when: 
+        - perform_remediation | bool
+        - has_drift | default(false)
+        - baseline_config | default('') | length > 0
+
+  rescue:
+    - name: Record device failure
+      set_fact:
+        failed_devices: "{{ failed_devices + [failure_record] }}"
+      vars:
+        failure_record:
+          hostname: "{{ inventory_hostname }}"
+          error: "{{ ansible_failed_result.msg | default('Unknown error') }}"
+      delegate_to: localhost
+
+    - name: Log device failure
+      debug:
+        msg: "Failed to process {{ inventory_hostname }}: {{ ansible_failed_result.msg | default('Unknown error') }}"

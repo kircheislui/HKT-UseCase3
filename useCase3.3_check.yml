@@ -1,0 +1,127 @@
+---
+- name: HKT Template 1 - Check Current NTP and SNMP Configurations
+  hosts: network_devices
+  gather_facts: no
+  vars:
+    backup_dir: "/var/tmp/hkt_backups"
+    report_dir: "/var/tmp/hkt_reports"
+
+  tasks:
+    - name: Get current timestamp
+      ansible.builtin.shell: date -u +"%Y-%m-%dT%H:%M%z"
+      register: timestamp_raw
+      delegate_to: localhost
+      run_once: true
+      changed_when: false
+
+    - name: Set timestamp variables
+      ansible.builtin.set_fact:
+        timestamp: "{{ timestamp_raw.stdout | trim }}"
+        timestamp_temp: "{{ timestamp_raw.stdout | trim | replace(':', '') | replace('-', '') | replace('+', '') }}"
+        timestamp_short: "{{ timestamp_temp[:12] }}"
+
+    - name: Create backup and report directories on controller
+      file:
+        path: "{{ item }}"
+        state: directory
+      loop:
+        - "{{ backup_dir }}"
+        - "{{ report_dir }}"
+      delegate_to: localhost
+      run_once: true
+
+    - name: Backup current running config
+      block:
+        - name: Backup for Cisco
+          cisco.ios.ios_command:
+            commands: show running-config
+          register: running_config
+          when: ansible_network_os | default('unknown') == 'ios'
+
+        - name: Backup for H3C
+          h3c_open.comware.comware_command:
+            commands: display current-configuration
+          register: running_config
+          when: ansible_network_os | default('unknown') == 'comware'
+
+        - name: Backup for Huawei
+          ansible.netcommon.net_get:
+            command: display current-configuration
+          register: running_config
+          when: ansible_network_os | default('unknown') == 'ce'
+
+        - name: Save backup to file
+          copy:
+            content: "{{ running_config.stdout[0] }}"
+            dest: "{{ backup_dir }}/{{ inventory_hostname }}_{{ timestamp_short }}.cfg"
+          delegate_to: localhost
+          when: running_config.stdout is defined
+
+    - name: Gather current SNMP config
+      block:
+        - name: Check SNMP for Cisco
+          cisco.ios.ios_command:
+            commands: show snmp community
+          register: snmp_report
+          when: ansible_network_os | default('unknown') == 'ios'
+
+        - name: Check SNMP for H3C
+          h3c_open.comware.comware_command:
+            commands: display snmp-agent community
+          register: snmp_report
+          when: ansible_network_os | default('unknown') == 'comware'
+
+        - name: Check SNMP for Huawei
+          ansible.netcommon.net_get:
+            command: display snmp-agent community
+          register: snmp_report
+          when: ansible_network_os | default('unknown') == 'ce'
+
+    - name: Gather current NTP config
+      block:
+        - name: Check NTP for Cisco
+          cisco.ios.ios_command:
+            commands: show ntp associations
+          register: ntp_report
+          when: ansible_network_os | default('unknown') == 'ios'
+
+        - name: Check NTP for H3C
+          h3c_open.comware.comware_command:
+            commands: display ntp-service sessions
+          register: ntp_report
+          when: ansible_network_os | default('unknown') == 'comware'
+
+        - name: Check NTP for Huawei
+          ansible.netcommon.net_get:
+            command: display ntp-service sessions
+          register: ntp_report
+          when: ansible_network_os | default('unknown') == 'ce'
+
+    - name: Generate and save configuration report
+      block:
+        - name: Assemble report content
+          set_fact:
+            report_content: |
+              # Ansible Playbook Technical Requirement Spec
+              ## HKT Use Case 3 Network Automation
+              ### Report for {{ inventory_hostname }}
+              #### Prepared by Red Hat Consulting
+              #### Date: {{ timestamp }}
+
+              **Host Details:**
+              - Hostname: {{ inventory_hostname }}
+              - Network OS: {{ ansible_network_os | default('Unknown') }}
+              - IP Address: {{ ansible_host | default('N/A') }}
+              - Report Generated: {{ timestamp }}
+
+              **Current Configurations:**
+              - **SNMP Configuration:**
+                {{ snmp_report.stdout | default('No SNMP data available') | indent(18) }}
+              - **NTP Configuration:**
+                {{ ntp_report.stdout | default('No NTP data available') | indent(18) }}
+
+        - name: Save report to file
+          copy:
+            content: "{{ report_content }}"
+            dest: "{{ report_dir }}/{{ inventory_hostname }}_config_report_{{ timestamp_short }}.txt"
+          delegate_to: localhost

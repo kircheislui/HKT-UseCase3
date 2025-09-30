@@ -1,0 +1,412 @@
+---
+- name: Find MAC Address and Port for Given IP on Network Devices
+  hosts: network_devices
+  gather_facts: true  # Enable facts to access ansible_date_time
+  connection: ansible.netcommon.network_cli
+  become: yes
+  become_method: ansible.netcommon.enable
+
+  vars:
+    ip_address: "{{ ip_address | default('') }}"  # From survey
+    mac_address: "{{ mac_address | default('') }}"  # From survey
+    device_location: "{{ device_location | default('office') }}"  # From survey
+    template_mode: "{{ template_mode | default('template1') }}"  # Switch between template1 and template2
+    allow_changes: "{{ allow_changes | default('no') }}"  # Explicitly disable changes in prod
+    email:
+      smtp_server: "smtp.pccw.com"
+      smtp_port: 25
+      from_address: "osp-alertmgr@pccw.com"
+      to_recipients: "kenny.wh.lo@pccw.com,mtam@redhat.com"
+      subject: "UseCase3.1 Check Report - Template {{ '1' if template_mode == 'template1' else '2' }} - IP:{{ ip_address | default('N/A') }} MAC:{{ mac_address | default(target_mac | default('N/A')) }} Loc:{{ device_location }} - {{ ansible_date_time.iso8601 | default(now().strftime('%Y-%m-%dT%H:%M:%SZ')) }}"
+
+  tasks:
+    # --- SET DEVICE-SPECIFIC COMMANDS ---
+    - name: Set device-specific commands
+      ansible.builtin.set_fact:
+        ip_command: "{{ 'show ip interface brief' if 'cisco.ios' in ansible_network_os else 'display ip interface brief' }}"
+        arp_command: "{{ 'show arp' if 'cisco.ios' in ansible_network_os else 'display arp' }}"
+        ping_command: "{{ 'ping ' + ip_address if 'cisco.ios' in ansible_network_os else 'ping -c 1 ' + ip_address }}"
+        mac_command: "{{ 'show mac address-table' if 'cisco.ios' in ansible_network_os else 'display mac-address' }}"
+
+    - name: Set pagination disable command
+      ansible.builtin.set_fact:
+        pagination_cmd: "{{ 'terminal length 0' if 'cisco.ios' in ansible_network_os else 'screen-length disable' if 'h3c_open.comware' in ansible_network_os else 'screen-length 0 temporary' if 'ce' in ansible_network_os else '' }}"
+
+    - name: DEBUG - Show determined commands
+      ansible.builtin.debug:
+        msg:
+          - "IP command: {{ ip_command }}"
+          - "ARP command: {{ arp_command }}"
+          - "Ping command: {{ ping_command }}"
+          - "MAC command: {{ mac_command }}"
+          - "Pagination command: {{ pagination_cmd }}"
+
+    # --- DISABLE PAGINATION ---
+    - name: Disable pagination on devices
+      ansible.netcommon.cli_command:
+        command: "{{ pagination_cmd }}"
+      when: pagination_cmd != ''
+      ignore_errors: yes  # In case not supported
+
+    # --- PING TO POPULATE ARP TABLE ---
+    - name: Ping the IP to populate ARP table
+      ansible.netcommon.cli_command:
+        command: "{{ ping_command }}"
+      register: ping_output
+      ignore_errors: yes
+      when: ip_address != '' and mac_address == ''
+      changed_when: false
+
+    - name: DEBUG - Show ping output
+      ansible.builtin.debug:
+        var: ping_output.stdout_lines
+      when: ping_output.stdout_lines is defined
+
+    # --- FETCH ARP TABLE ---
+    - name: Run command to get ARP details
+      ansible.netcommon.cli_command:
+        command: "{{ arp_command }}"
+      register: arp_output
+      when: ip_address != '' and mac_address == ''
+      changed_when: false
+
+    - name: DEBUG - Show raw ARP command output
+      ansible.builtin.debug:
+        var: arp_output.stdout_lines
+      when: ip_address != '' and mac_address == ''
+
+    # --- FILTER ARP FOR IP AND EXTRACT MAC ---
+    - name: Find ARP entry for the given IP
+      ansible.builtin.set_fact:
+        arp_line: "{{ arp_output.stdout_lines | select('search', ip_address) | list }}"
+      when: ip_address != '' and mac_address == ''
+
+    - name: Extract MAC address from ARP entry
+      ansible.builtin.set_fact:
+        found_mac: "{{ arp_line[0] | regex_search('([0-9a-fA-F]{4}[\\.-][0-9a-fA-F]{4}[\\.-][0-9a-fA-F]{4})') | default('Not found') }}"
+      when: ip_address != '' and mac_address == '' and arp_line is defined and arp_line | length > 0
+
+    # --- EXTRACT PORT FROM ARP FOR HUAWEI ---
+    - name: Extract port from ARP entry for Huawei
+      ansible.builtin.set_fact:
+        arp_port: "{{ arp_line[0].split()[3] if 'ce' in ansible_network_os else 'Not found' }}"
+      when: ip_address != '' and mac_address == '' and arp_line is defined and arp_line | length > 0 and 'ce' in ansible_network_os
+
+    - name: Set target MAC (use provided or found)
+      ansible.builtin.set_fact:
+        target_mac: "{{ mac_address if mac_address != '' else found_mac | default('Not found') }}"
+
+    - name: Normalize MAC for device-specific query format
+      ansible.builtin.set_fact:
+        query_mac: >-
+          {{
+            (target_mac | lower | replace('-', '.')) if 'cisco.ios' in ansible_network_os else
+            (target_mac | lower | replace('.', '-')) if 'h3c_open.comware' in ansible_network_os or 'ce' in ansible_network_os else
+            target_mac | lower
+          }}
+      when: target_mac != 'Not found'
+
+    - name: DEBUG - Show target MAC
+      ansible.builtin.debug:
+        msg: "Target MAC: {{ target_mac }} at location {{ device_location }}"
+
+    - name: DEBUG - Show normalized query MAC
+      ansible.builtin.debug:
+        msg: "Query MAC for {{ inventory_hostname }}: {{ query_mac | default('N/A') }}"
+      when: target_mac != 'Not found'
+
+    # --- QUERY MAC ADDRESS TABLE TO FIND PORT ---
+    - name: Query MAC address table when MAC available
+      ansible.netcommon.cli_command:
+        command: "{{ mac_command }} | include {{ query_mac | default(target_mac) }}"
+      register: mac_table
+      when: target_mac != 'Not found'
+      changed_when: false
+
+    - name: DEBUG - Show raw MAC table output
+      ansible.builtin.debug:
+        var: mac_table.stdout_lines
+
+    - name: Fallback MAC address table query for Huawei
+      ansible.netcommon.cli_command:
+        command: "{{ mac_command }}"
+      register: mac_table_fallback
+      when: target_mac != 'Not found' and mac_table.stdout_lines | length == 0 and 'ce' in ansible_network_os
+      changed_when: false
+
+    - name: DEBUG - Show fallback MAC table output
+      ansible.builtin.debug:
+        var: mac_table_fallback.stdout_lines
+      when: mac_table_fallback.stdout_lines is defined
+
+    - name: Combine MAC table results
+      ansible.builtin.set_fact:
+        mac_table_combined: "{{ 
+          mac_table.stdout_lines if mac_table.stdout_lines | length > 0 else 
+          mac_table_fallback.stdout_lines | default([]) 
+        }}"
+      when: target_mac != 'Not found'
+
+    - name: Find MAC table entry line (filters out headers)
+      ansible.builtin.set_fact:
+        mac_line: "{{ mac_table_combined | select('search', query_mac | default(target_mac)) | list | default([]) }}"
+      when: target_mac != 'Not found'
+
+    - name: DEBUG - Log no MAC table entry found
+      ansible.builtin.debug:
+        msg: "No MAC table entry found for {{ query_mac | default(target_mac) }} on {{ inventory_hostname }}"
+      when: target_mac != 'Not found' and mac_line | length == 0
+
+    - name: Initialize port_data for all hosts
+      ansible.builtin.set_fact:
+        port_data: "{{ hostvars[inventory_hostname].get('port_data', []) | default([]) }}"
+        cacheable: yes
+
+    - name: Extract port from MAC table entry
+      ansible.builtin.set_fact:
+        found_port: "{{ 
+          mac_line[0].split()[-1] if 'cisco.ios' in ansible_network_os else 
+          mac_line[0].split()[3] if 'h3c_open.comware' in ansible_network_os else 
+          mac_line[0].split()[2] if 'ce' in ansible_network_os and mac_line[0].split() | length > 2 else 
+          arp_port | default('Not found') if 'ce' in ansible_network_os else 
+          'Not found' 
+        }}"
+      when: mac_line is defined and (mac_line | length > 0 or ('ce' in ansible_network_os and arp_port is defined and arp_port != 'Not found'))
+
+    - name: Set default found_port if not extracted
+      ansible.builtin.set_fact:
+        found_port: "{{ found_port | default('Not found') }}"
+
+    - name: DEBUG - Show extracted port
+      ansible.builtin.debug:
+        msg: "Extracted port: {{ found_port }} for MAC {{ query_mac | default(target_mac) }} on {{ inventory_hostname }}"
+      when: target_mac != 'Not found'
+
+    # --- CHECK PORT TYPE ---
+    - name: Check port type when port is found
+      ansible.netcommon.cli_command:
+        command: "{{ 
+          'show interfaces ' + found_port + ' switchport' if 'cisco.ios' in ansible_network_os else 
+          'display interface ' + found_port + ' brief' if 'h3c_open.comware' in ansible_network_os else 
+          'display interface ' + found_port + ' brief' if 'ce' in ansible_network_os else 
+          ''
+        }}"
+      register: port_output
+      ignore_errors: yes
+      failed_when: false
+      when: found_port != 'Not found'
+
+    - name: Fallback port type query for Huawei
+      ansible.netcommon.cli_command:
+        command: "display port vlan"
+      register: port_output_fallback
+      ignore_errors: yes
+      failed_when: false
+      when: found_port != 'Not found' and 'ce' in ansible_network_os and (port_output.stdout_lines is not defined or port_output.stdout_lines | length == 0)
+
+    - name: Combine port type output
+      ansible.builtin.set_fact:
+        port_output_combined: "{{ 
+          port_output.stdout_lines if port_output.stdout_lines is defined and port_output.stdout_lines | length > 0 else 
+          port_output_fallback.stdout_lines | default([]) 
+        }}"
+      when: found_port != 'Not found'
+
+    - name: DEBUG - Show port type output
+      ansible.builtin.debug:
+        var: port_output_combined
+      when: found_port != 'Not found' and port_output_combined is defined
+
+    - name: Parse port type accurately
+      ansible.builtin.set_fact:
+        port_type: "{{ 
+          'trunk' if (port_output.stdout is defined and port_output.stdout | regex_search('Administrative Mode:\\s*trunk')) else 
+          'access' if (port_output.stdout is defined and port_output.stdout | regex_search('Administrative Mode:\\s*static access')) else 
+          'unknown' if 'cisco.ios' in ansible_network_os else 
+          ({'a': 'access', 't': 'trunk', 'h': 'hybrid'}.get(port_line.split()[4].lower(), 'unknown')) if 'h3c_open.comware' in ansible_network_os and port_line and port_line.split() | length > 4 else 
+          ({'access': 'access', 'trunk': 'trunk', 'hybrid': 'hybrid'}.get(port_line.split()[1].lower(), 'unknown')) if 'ce' in ansible_network_os and port_line and port_line.split() | length > 1 else 
+          'unknown' 
+        }}"
+      vars:
+        port_line: "{{ port_output_combined | select('search', found_port) | first | default('') }}"
+      when: found_port != 'Not found' and port_output_combined is defined
+
+    - name: Set default port type if not parsed
+      ansible.builtin.set_fact:
+        port_type: "{{ port_type | default('unknown') }}"
+      when: found_port != 'Not found'
+
+    - name: DEBUG - Log port type parsing failure
+      ansible.builtin.debug:
+        msg: "Failed to parse port type for {{ found_port }} on {{ inventory_hostname }}: port_line={{ port_line | default('empty') }}"
+      when: found_port != 'Not found' and port_type == 'unknown'
+
+    - name: Log port type (access or trunk)
+      ansible.builtin.debug:
+        msg: "Port {{ found_port }} on {{ inventory_hostname }} at {{ device_location }} is {{ port_type }}"
+      when: found_port != 'Not found' and port_type != 'unknown'
+
+    # --- COLLECT DEVICE DATA FOR EMAIL ---
+    - name: Collect device data for email
+      ansible.builtin.set_fact:
+        device_data: "{{ hostvars[inventory_hostname].get('device_data', []) | default([]) + [{'hostname': inventory_hostname, 'port': found_port, 'port_type': port_type | default('unknown')}] }}"
+        cacheable: yes
+
+    # --- TEMPLATE 1: SEND SINGLE EMAIL ---
+    - name: Send email notification (Template 1)
+      ansible.builtin.mail:
+        host: "{{ email.smtp_server }}"
+        port: "{{ email.smtp_port }}"
+        sender: "{{ email.from_address }}"
+        to: "{{ email.to_recipients }}"
+        subject: "{{ email.subject }}"
+        body: |
+          Use Case 3.1 Check Report
+          IP: {{ ip_address | default('N/A') }}
+          MAC: {{ target_mac | default('N/A') }}
+          Location: {{ device_location }}
+          Summary: {% if access_ports | default([]) | selectattr('type', 'equalto', 'access') | list | length == 1 %}
+          One Access port found on device: {{ (access_ports | selectattr('type', 'equalto', 'access') | first).hostname }}, port: {{ (access_ports | selectattr('type', 'equalto', 'access') | first).port }}. (restart will applied in template 2)
+          {% else %}
+          {% set found_ports = groups['network_devices'] | map('extract', hostvars, 'device_data') | select('defined') | flatten | selectattr('port', 'ne', 'Not found') | list %}
+          {% if found_ports | length == 0 %}
+          Port not found on all devices.
+          {% else %}
+          No single access port found ({{ access_ports | default([]) | selectattr('type', 'equalto', 'access') | list | length }} access ports found).
+          {% endif %}
+          {% endif %}
+
+          {% for device in groups['network_devices'] %}
+          {% set dev_data = hostvars[device].device_data | default([]) | selectattr('hostname', 'equalto', device) | first | default({}) %}
+          {% if dev_data.port | default('Not found') == 'Not found' %}
+          Device: {{ device }}
+          IP: {{ ip_address | default('N/A') }}
+          MAC Address: {{ target_mac | default('N/A') }}
+          Note: Port not found on this device.
+          {% else %}
+          Use Case 3.1 Check Report
+          Device: {{ device }}
+          Location: {{ device_location }}
+          MAC Address: {{ target_mac | default('N/A') }}
+          Port: {{ dev_data.port | default('Not found') }}
+          Port Type: {{ dev_data.port_type | default('unknown') }}
+          Note: {% if dev_data.port_type | default('unknown') == 'access' %}
+          Access port by IP / MAC located in this port (restart will applied in template 2)
+          {% else %}
+          Dry-run simulation applied (restart would occur on access port).
+          {% endif %}
+          {% endif %}
+
+          {% endfor %}
+      run_once: true
+      delegate_to: localhost
+      when: template_mode == 'template1'
+
+    # --- TEMPLATE 2: RESTART SIMULATION WITH CONDITIONS AND 100% DRY RUN ---
+    - name: Collect port data for global aggregation
+      ansible.builtin.set_fact:
+        port_data: "{{ hostvars[inventory_hostname].get('port_data', []) | default([]) + [{'hostname': inventory_hostname, 'port': found_port, 'type': port_type | default('unknown')}] }}"
+        cacheable: yes
+      when: found_port != 'Not found' and template_mode == 'template2'
+
+    - name: Aggregate access ports across all devices (run once after all hosts)
+      ansible.builtin.set_fact:
+        access_ports: "{{ 
+          (groups['network_devices'] | map('extract', hostvars, 'port_data') | select('defined') | flatten | selectattr('type', 'equalto', 'access') | list) | default([]) 
+        }}"
+      run_once: true
+      when: template_mode == 'template2'
+      delegate_to: localhost
+
+    - name: DEBUG - Show aggregated access ports (for verification)
+      ansible.builtin.debug:
+        var: access_ports
+      run_once: true
+      when: template_mode == 'template2'
+
+    - name: Simulate restart access port if not trunk (Template 2, 100% dry run)
+      ansible.builtin.debug:
+        msg: "Dry Run: Would apply configuration - interface {{ found_port }} shutdown {{ 'no shutdown' if 'cisco.ios' in ansible_network_os else 'undo shutdown' }}"
+      when: 
+        - found_port != 'Not found'
+        - port_type == 'access'
+        - template_mode == 'template2'
+        - access_ports | length == 1
+        - allow_changes == 'no'
+
+    - name: Log skip for invalid access port count (Template 2)
+      ansible.builtin.debug:
+        msg: "Skipping restart: Found {{ access_ports | length }} access ports (expected 1). Dry run mode active."
+      when: 
+        - found_port != 'Not found'
+        - port_type == 'access'
+        - template_mode == 'template2'
+        - access_ports | length != 1
+
+    - name: Log skip for trunk port (Template 2)
+      ansible.builtin.debug:
+        msg: "Skipping restart for trunk port {{ found_port }} on {{ inventory_hostname }} at {{ device_location }}. Dry run mode active."
+      when: 
+        - found_port != 'Not found'
+        - port_type == 'trunk'
+        - template_mode == 'template2'
+
+    - name: Send email notification (Template 2)
+      ansible.builtin.mail:
+        host: "{{ email.smtp_server }}"
+        port: "{{ email.smtp_port }}"
+        sender: "{{ email.from_address }}"
+        to: "{{ email.to_recipients }}"
+        subject: "{{ email.subject }}"
+        body: |
+          Use Case 3.1 Check Report
+          IP: {{ ip_address | default('N/A') }}
+          MAC: {{ target_mac | default('N/A') }}
+          Location: {{ device_location }}
+          Summary: {% if access_ports | default([]) | selectattr('type', 'equalto', 'access') | list | length == 1 %}
+          Port restarted on device: {{ (access_ports | selectattr('type', 'equalto', 'access') | first).hostname }}, port: {{ (access_ports | selectattr('type', 'equalto', 'access') | first).port }}.
+          {% else %}
+          {% set found_ports = groups['network_devices'] | map('extract', hostvars, 'device_data') | select('defined') | flatten | selectattr('port', 'ne', 'Not found') | list %}
+          {% if found_ports | length == 0 %}
+          Port not found on all devices.
+          {% else %}
+          No single access port found ({{ access_ports | default([]) | selectattr('type', 'equalto', 'access') | list | length }} access ports found).
+          {% endif %}
+          {% endif %}
+
+          {% for device in groups['network_devices'] %}
+          {% set dev_data = hostvars[device].device_data | default([]) | selectattr('hostname', 'equalto', device) | first | default({}) %}
+          {% if dev_data.port | default('Not found') == 'Not found' %}
+          Device: {{ device }}
+          IP: {{ ip_address | default('N/A') }}
+          MAC Address: {{ target_mac | default('N/A') }}
+          Note: Port not found on this device.
+          {% else %}
+          Use Case 3.1 Check Report
+          Device: {{ device }}
+          Location: {{ device_location }}
+          MAC Address: {{ target_mac | default('N/A') }}
+          Port: {{ dev_data.port | default('Not found') }}
+          Port Type: {{ dev_data.port_type | default('unknown') }}
+          Note: {% if dev_data.port_type | default('unknown') == 'access' %}
+          Access port by IP / MAC located in this port and port restarted
+          {% else %}
+          Dry-run simulation applied (restart would occur on access port).
+          {% endif %}
+          {% endif %}
+
+          {% endfor %}
+      run_once: true
+      delegate_to: localhost
+      when: template_mode == 'template2'
+
+    # --- OUTPUT RESULTS ---
+    - name: Display MAC and port for IP
+      ansible.builtin.debug:
+        msg: "MAC address {{ target_mac }} for IP {{ ip_address }} at location {{ device_location }} is on port {{ found_port | default('Not found') }}"
+      when: target_mac != 'Not found' and (mac_line | default([]) | length > 0 or arp_port is defined)
+
+    - name: No MAC or port found
+      ansible.builtin.debug:
+        msg: "No MAC or port found for IP {{ ip_address }} on this device at location {{ device_location }}"
+      when: target_mac == 'Not found' or (mac_line | default([]) | length == 0 and arp_port is not defined)

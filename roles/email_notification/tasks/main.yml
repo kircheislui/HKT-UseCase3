@@ -1,0 +1,15 @@
+---
+- name: Send email notification
+  mail:
+    to: "{{ email_to_recipients }}"
+    subject: "{{ email_subject }}"
+    body: "{{ email_summary }}"
+    smtp_server: "{{ smtp_server }}"
+    smtp_port: "{{ smtp_port | default(587) }}"
+    username: "{{ smtp_username | default(omit) }}"
+    password: "{{ smtp_password | default(omit) }}"
+    secure: "{{ smtp_secure | default('starttls') }}"
+    attach: "/tmp/drift_report_{{ timestamp }}.txt"
+  delegate_to: localhost
+  run_once: true
+  when: email_to_recipients is defined

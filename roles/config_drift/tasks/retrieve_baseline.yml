@@ -1,0 +1,21 @@
+---
+- name: Find baseline configuration files in local directory
+  find:
+    paths: "{{ playbook_dir }}/baseline-configs"
+    patterns: "*.txt"
+  register: baseline_config_files
+  delegate_to: localhost
+
+- name: Load baseline configuration contents
+  set_fact:
+    baseline_configs: "{{ baseline_configs | combine({config_name: config_content}) }}"
+  vars:
+    config_name: "{{ item.path | basename | regex_replace('\\.txt$', '') }}"
+    config_content: "{{ lookup('file', item.path) }}"
+  loop: "{{ baseline_config_files.files }}"
+  delegate_to: localhost
+
+- name: Debug baseline configurations loaded
+  debug:
+    msg: "Loaded baseline configurations: {{ baseline_configs.keys() | list }}"
+  delegate_to: localhost
