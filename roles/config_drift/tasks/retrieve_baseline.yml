@@ -2,17 +2,17 @@
 - name: Debug baseline_config_dir value
   debug:
     msg: "baseline_config_dir is set to: {{ baseline_config_dir | default('UNDEFINED - PLEASE DEFINE IN VARS') }}"
-  delegate_to: localhost  # Added to confirm the dir path is set correctly
+  delegate_to: localhost
 
 - name: Debug baseline_config_dir contents
   shell: ls -R {{ baseline_config_dir }} || echo "Directory not found or empty"
   register: dir_contents
   delegate_to: localhost
-  ignore_errors: true  # Added to list files recursively and show structure
+  ignore_errors: true
 
 - name: Display directory contents
   debug:
-    var: dir_contents.stdout  # Shows if subdirs (cisco, h3c, huawei) and baseline_config.txt exist
+    var: dir_contents.stdout
 
 - name: Check if baseline files exist and are non-empty
   stat:
@@ -22,12 +22,12 @@
     - h3c
     - huawei
   register: file_stats
-  delegate_to: localhost  # Added to check each file's existence and size
+  delegate_to: localhost
 
 - name: Display file status
   debug:
     msg: "Vendor {{ item.item }} baseline file exists: {{ item.stat.exists }}, size: {{ item.stat.size | default(0) }} bytes"
-  loop: "{{ file_stats.results }}"  # Shows if each baseline_config.txt is found and non-empty
+  loop: "{{ file_stats.results }}"
 
 - name: Create baseline directory structure if not exists
   file:
@@ -42,28 +42,10 @@
 - name: Find all baseline configuration files
   find:
     paths: "{{ baseline_config_dir }}"
-    patterns:
-      - "baseline_config.txt"
+    patterns: "baseline_config.txt"
     recurse: yes
   register: all_baseline_files
   delegate_to: localhost
-
-- name: Initialize baseline configs dictionary
-  set_fact:
-    baseline_configs: {}
-
-- name: Load baseline configurations by vendor
-  set_fact:
-    baseline_configs: "{{ baseline_configs | combine({vendor: config_content}) }}"
-  vars:
-    vendor: "{{ item.path | dirname | basename }}"
-    config_content: "{{ lookup('file', item.path) }}"
-  loop: "{{ all_baseline_files.files }}"
-  delegate_to: localhost
-  when: all_baseline_files.files | length > 0
-
-- debug:
-    var: baseline_configs
 
 - name: Find remediation command files
   find:
@@ -83,17 +65,12 @@
   delegate_to: localhost
   when: remediation_files.files | length > 0
 
-- name: Debug loaded configurations
+- name: Debug loaded remediation commands
   debug:
     msg: |
       ========================================
-      📚 BASELINE CONFIGURATIONS LOADED
+      📚 REMEDIATION COMMANDS LOADED
       ========================================
-      Loaded baseline vendors: {{ baseline_configs.keys() | list }}
       Available remediation commands: {{ remediation_commands.keys() | default([]) | list }}
-      
-      Baseline sizes:
-      {% for vendor, content in baseline_configs.items() %}
-      - {{ vendor }}: {{ content.split('\n') | length }} lines
-      {% endfor %}
       ========================================
+  delegate_to: localhost
