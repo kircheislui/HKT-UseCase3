@@ -29,18 +29,35 @@
         msg: "Expected baseline file for vendor {{ vendor_baseline_dir }}: {{ baseline_config_dir }}/{{ vendor_baseline_dir }}/baseline_config.txt"
       when: baseline_config_dir is defined  # Added to show the full path Ansible is using for the file
 
-    - name: Retrieve running configuration
-      cli_command:
-        command: "{{ show_run_commands[normalized_network_os] | default('show running-config') }}"
-      register: running_config
+#    - name: Retrieve running configuration
+#      cli_command:
+#        command: "{{ show_run_commands[normalized_network_os] | default('show running-config') }}"
+#      register: running_config
+#      vars:
+#        show_run_commands:
+#          ios: "show running-config"
+#          nxos: "show running-config"
+#          eos: "show running-config"
+#          comware: "display current-configuration"
+#          ce: "display current-configuration"
+#          vrp: "display current-configuration"
+
+    - name: Retrieve running configuration from local file
+      set_fact:
+        running_config:
+          stdout: "{{ config_content.stdout | join('\n') }}"
       vars:
-        show_run_commands:
-          ios: "show running-config"
-          nxos: "show running-config"
-          eos: "show running-config"
-          comware: "display current-configuration"
-          ce: "display current-configuration"
-          vrp: "display current-configuration"
+        config_files:
+          ios: "cisco-ios_config.txt"
+          nxos: "cisco-ios_config.txt"
+          eos: "cisco-ios_config.txt"
+          comware: "h3c_open-comware_config.txt"
+          ce: "huawei_config.txt.txt"
+          vrp: "huawei_config.txt.txt"
+        file_path: "{{ downloaded_configs_dir }}/{{ config_files[normalized_network_os] | default('unknown_config.txt') }}"
+        config_json: "{{ lookup('file', file_path) | from_json }}"
+        config_content: "{{ config_json }}"
+      when: downloaded_configs_dir is defined
 
     - name: Create local backup of running configuration
       copy:

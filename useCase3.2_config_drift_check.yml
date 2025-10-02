@@ -1,10 +1,11 @@
 ---
 - name: Network Configuration Drift Detection and Remediation
-  hosts: all
+  hosts: localhost
   gather_facts: yes
-  connection: network_cli
-  become: yes
-  become_method: enable
+#  connection: network_cli
+  connection: local
+#  become: yes
+#  become_method: enable
   
   vars:
     # Playbook mode control
@@ -51,10 +52,10 @@
       set_fact:
         pagination_cmd: "{{ pagination_commands[ansible_network_os.split('.')[-1]] | default('terminal length 0') }}"
 
-    - name: Disable pagination on devices
-      cli_command:
-        command: "{{ pagination_cmd }}"
-      ignore_errors: yes
+#    - name: Disable pagination on devices
+#      cli_command:
+#        command: "{{ pagination_cmd }}"
+#      ignore_errors: yes
 
     - name: Execute configuration drift detection and remediation
       include_role:

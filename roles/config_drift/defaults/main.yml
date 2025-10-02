@@ -9,3 +9,6 @@ save_html_report: true
 baseline_config_dir: "{{ playbook_dir }}/baseline-configs"
 backup_directory: "{{ playbook_dir }}/backups"
 report_directory: "{{ playbook_dir }}/reports"
+
+## temp
+downloaded_configs_dir: "{{ playbook_dir }}/network-device-results
