@@ -1,6 +1,6 @@
 ---
 - name: Network Configuration Drift Detection and Remediation
-  hosts: localhost
+  hosts: devices
   gather_facts: yes
 #  connection: network_cli
   connection: local
