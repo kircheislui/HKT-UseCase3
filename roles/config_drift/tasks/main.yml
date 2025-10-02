@@ -1,9 +1,6 @@
 ---
 - name: Initialize drift detection variables
   set_fact:
-    drift_results: []
-    remediated_devices: []
-    failed_devices: []
     timestamp: "{{ ansible_date_time.iso8601 | default(now().strftime('%Y-%m-%dT%H:%M:%SZ')) | regex_replace(':', '-') }}"
     backup_date: "{{ ansible_date_time.date | default(now().strftime('%Y-%m-%d')) }}"
 
@@ -28,6 +25,12 @@
 
 - name: Process each device for drift detection
   include_tasks: drift_detection.yml
+
+- name: Aggregate all drift results
+  set_fact:
+    drift_results: "{{ hostvars | dict2items | map(attribute='value.device_result') | select('defined') | list + (hostvars['localhost'].drift_results | default([])) }}"
+  delegate_to: localhost
+  run_once: true
 
 - name: Perform remediation if enabled and drift detected
   include_tasks: remediate_config.yml

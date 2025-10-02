@@ -89,10 +89,8 @@
         overall_device_drift: false
       when: not device_has_baseline
 
-    - name: Record comprehensive drift results for each device
+    - name: Record device drift result
       set_fact:
-        drift_results: "{{ (hostvars['localhost'].drift_results | default([])) + [device_result] }}"
-      vars:
         device_result:
           hostname: "{{ inventory_hostname }}"
           network_os: "{{ normalized_network_os }}"
@@ -104,7 +102,6 @@
           backup_created: "{{ perform_backup | bool }}"
           error: null
           scan_timestamp: "{{ ansible_date_time.iso8601 | default(now().strftime('%Y-%m-%dT%H:%M:%SZ')) }}"
-      delegate_to: localhost
 
     - name: Display drift status
       debug:
@@ -128,10 +125,16 @@
 
     - name: Record partial result for failed device
       set_fact:
-        drift_results: "{{ (hostvars['localhost'].drift_results | default([])) + [{'hostname': inventory_hostname, 'network_os': normalized_network_os | default('unknown'), 'has_drift': null, 'baseline_found': false, 'drift_details': {'summary': 'Scan failed'}, 'error': ansible_failed_result.msg | default('Unknown error')}] }}"
-      delegate_to: localhost
+        device_result:
+          hostname: "{{ inventory_hostname }}"
+          network_os: "{{ normalized_network_os | default('unknown') }}"
+          has_drift: null
+          baseline_found: false
+          drift_details: {"summary": "Scan failed"}
+          error: "{{ ansible_failed_result.msg | default('Unknown error') }}"
 
-    - name: Debug processed devices
-      debug:
-        msg: "Processed devices in drift_results: {{ hostvars['localhost'].drift_results | default([]) | length }}, Failed devices: {{ hostvars['localhost'].failed_devices | default([]) | length }}"
-      delegate_to: localhost
+- name: Aggregate drift results
+  set_fact:
+    drift_results: "{{ hostvars[inventory_hostname].device_result | default([]) | list + (hostvars['localhost'].drift_results | default([])) }}"
+  delegate_to: localhost
+  run_once: true
