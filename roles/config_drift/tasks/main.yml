@@ -30,13 +30,13 @@
 - name: Process each device for drift detection
   include_tasks: drift_detection.yml
 
-- name: Perform remediation if enabled and drift detected
-  include_tasks: remediate_config.yml
-  when: 
-    - perform_remediation | bool
-    - overall_device_drift | bool
-
-- name: Generate comprehensive reports
-  include_tasks: generate_report.yml
-  run_once: true  # Removed delegate_to, as tasks inside handle it
-  when: drift_results is defined and drift_results | length > 0
+#- name: Perform remediation if enabled and drift detected
+#  include_tasks: remediate_config.yml
+#  when: 
+#    - perform_remediation | bool
+#    - overall_device_drift | bool
+#
+#- name: Generate comprehensive reports
+#  include_tasks: generate_report.yml
+#  run_once: true  # Removed delegate_to, as tasks inside handle it
+#  when: drift_results is defined and drift_results | length > 0
