@@ -42,7 +42,8 @@
 - name: Find all baseline configuration files
   find:
     paths: "{{ baseline_config_dir }}"
-    patterns: "baseline_config.txt"
+    patterns:
+      - "baseline_config.txt"
     recurse: yes
   register: all_baseline_files
   delegate_to: localhost
