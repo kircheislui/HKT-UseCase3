@@ -62,6 +62,9 @@
   delegate_to: localhost
   when: all_baseline_files.files | length > 0
 
+- debug:
+    var: baseline_configs
+
 - name: Find remediation command files
   find:
     paths: "{{ baseline_config_dir }}"
