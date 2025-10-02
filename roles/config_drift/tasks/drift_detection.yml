@@ -1,12 +1,12 @@
 ---
 - name: Debug network OS detection
   debug:
-    msg: "Device: {{ inventory_hostname }}, Network OS: {{ ansible_network_os }}"
+    msg: "Device: {{ inventory_hostname }}, Network OS: {{ _ansible_network_os }}"
 
 - block:
     - name: Normalize network OS for command lookup
       set_fact:
-        normalized_network_os: "{{ (ansible_network_os | default('ios')).split('.')[-1] }}"
+        normalized_network_os: "{{ (_ansible_network_os | default('ios')).split('.')[-1] }}"
 
     - name: Debug normalized network OS
       debug:
