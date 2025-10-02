@@ -59,7 +59,7 @@
     vendor: "{{ item.path | dirname | basename }}"
     config_content: "{{ lookup('file', item.path) }}"
   loop: "{{ all_baseline_files.files }}"
-#  delegate_to: localhost
+  delegate_to: localhost
   when: all_baseline_files.files | length > 0
 
 - name: Find remediation command files
