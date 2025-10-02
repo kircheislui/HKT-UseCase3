@@ -1,0 +1,45 @@
+/*	
+.CHANGE_TEMPLATE_DESCRIPTION
+        Change SNMP Community Strings on Cisco IOS devices
+.CHANGE_TEMPLATE_TAGS
+	Cisco
+.PLATFORM_DESCRIPTION
+        Cisco IOS
+.PARAMETER_LABEL @ContextNode
+        NCM Node
+.PARAMETER_DESCRIPTION @ContextNode
+        The node the template will operate on.  All templates require this by default. The target node is selected during the first part of the wizard so it will not be available for selection when defining values of variables.
+
+.PARAMETER_LABEL @SNMPCommunity
+        The current Community String
+.PARAMETER_DESCRIPTION @SNMPCommunity
+        Enter the current SNMP Community String
+
+.PARAMETER_LABEL @new_SNMPCommunity
+        The new Community String
+.PARAMETER_DESCRIPTION @new_SNMPCommunity
+        Enter New SNMP Community String
+
+.PARAMETER_LABEL @Type
+        Type
+.PARAMETER_DESCRIPTION @Type
+        RO - Read-only, RW - Read/Write
+.PARAMETER_DISPLAY_TYPE  @Type
+        listbox: 1=RO|2=RW
+
+*/
+
+script ChangeSNMPCommunityCiscoIOS (
+                                           NCM.Nodes @ContextNode, 
+                                           string @SNMPCommunity,
+                                           string @new_SNMPCommunity, 
+                                           string @Type            )
+{
+  CLI
+  {
+    configure terminal
+    no snmp-server community @SNMPCommunity @Type
+    snmp-server community @new_SNMPCommunity @Type
+    exit
+  }
+}

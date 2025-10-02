@@ -1,0 +1,59 @@
+/*	
+.CHANGE_TEMPLATE_DESCRIPTION
+        Configure NTP Server on Cisco IOS devices
+.CHANGE_TEMPLATE_TAGS
+        Cisco, NTP
+.PLATFORM_DESCRIPTION
+        Cisco IOS
+.PARAMETER_LABEL @ContextNode
+        NCM Node
+.PARAMETER_DESCRIPTION @ContextNode
+        The node the template will operate on.
+
+.PARAMETER_LABEL @NTPServer
+        NTP Server IP/Hostname
+.PARAMETER_DESCRIPTION @NTPServer
+        IP address or resolvable hostname of the NTP server.
+
+.PARAMETER_LABEL @SourceIntf
+        Source Interface (optional)
+.PARAMETER_DESCRIPTION @SourceIntf
+        Interface to use as the source for NTP packets (e.g., GigabitEthernet0/0). Leave blank for default.
+
+.PARAMETER_LABEL @Mode
+        Operation Mode
+.PARAMETER_DESCRIPTION @Mode
+        Choose whether to replace the existing NTP server list or just add this server.
+.PARAMETER_DISPLAY_TYPE @Mode
+        listbox: 1=Replace|2=Add
+*/
+
+script ChangeNTPServerCiscoIOS (
+                                           NCM.Nodes @ContextNode,
+                                           string @NTPServer,
+                                           string @SourceIntf,
+                                           string @Mode )
+{
+    CLI
+    {
+        configure terminal
+
+        /* If the user selected “Replace”, remove all existing NTP servers first */
+        if ( @Mode == "Replace" )
+        {
+            no ntp server
+        }
+
+        /* Build the command – add source interface only if supplied */
+        if ( @SourceIntf != "" )
+        {
+            ntp server @NTPServer source @SourceIntf
+        }
+        else
+        {
+            ntp server @NTPServer
+        }
+
+        exit
+    }
+}

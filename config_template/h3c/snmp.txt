@@ -1,0 +1,47 @@
+/*	
+.CHANGE_TEMPLATE_DESCRIPTION
+        Change SNMP Community Strings on H3C (Comware) devices
+.CHANGE_TEMPLATE_TAGS
+        H3C,Comware
+.PLATFORM_DESCRIPTION
+        H3C Comware
+.PARAMETER_LABEL @ContextNode
+        NCM Node
+.PARAMETER_DESCRIPTION @ContextNode
+        The node the template will operate on.  All templates require this by default. The target node is selected during the first part of the wizard so it will not be available for selection when defining values of variables.
+
+.PARAMETER_LABEL @SNMPCommunity
+        The current Community String
+.PARAMETER_DESCRIPTION @SNMPCommunity
+        Enter the current SNMP Community String
+
+.PARAMETER_LABEL @new_SNMPCommunity
+        The new Community String
+.PARAMETER_DESCRIPTION @new_SNMPCommunity
+        Enter New SNMP Community String
+
+.PARAMETER_LABEL @Type
+        Type
+.PARAMETER_DESCRIPTION @Type
+        RO – Read‑only, RW – Read/Write
+.PARAMETER_DISPLAY_TYPE @Type
+        listbox: 1=RO|2=RW
+*/
+
+script ChangeSNMPCommunityH3C (
+                                           NCM.Nodes @ContextNode, 
+                                           string @SNMPCommunity,
+                                           string @new_SNMPCommunity, 
+                                           string @Type            )
+{
+    CLI
+    {
+        configure terminal
+        /* Remove the old community */
+        undo snmp-agent community @SNMPCommunity @Type
+
+        /* Add the new community */
+        snmp-agent community @new_SNMPCommunity @Type
+        exit
+    }
+}

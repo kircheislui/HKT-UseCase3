@@ -1,0 +1,59 @@
+/*	
+.CHANGE_TEMPLATE_DESCRIPTION
+        Configure NTP Server on Huawei (VRP) devices
+.CHANGE_TEMPLATE_TAGS
+        Huawei, VRP, NTP
+.PLATFORM_DESCRIPTION
+        Huawei VRP
+.PARAMETER_LABEL @ContextNode
+        NCM Node
+.PARAMETER_DESCRIPTION @ContextNode
+        The node the template will operate on.
+
+.PARAMETER_LABEL @NTPServer
+        NTP Server IP/Hostname
+.PARAMETER_DESCRIPTION @NTPServer
+        IP address or resolvable hostname of the NTP server.
+
+.PARAMETER_LABEL @SourceIntf
+        Source Interface (optional)
+.PARAMETER_DESCRIPTION @SourceIntf
+        Interface to use as the source for NTP packets (e.g., GigabitEthernet0/0/0). Leave blank for default.
+
+.PARAMETER_LABEL @Mode
+        Operation Mode
+.PARAMETER_DESCRIPTION @Mode
+        Replace existing NTP servers or just add a new one.
+.PARAMETER_DISPLAY_TYPE @Mode
+        listbox: 1=Replace|2=Add
+*/
+
+script ChangeNTPServerHuaweiVRP (
+                                           NCM.Nodes @ContextNode,
+                                           string @NTPServer,
+                                           string @SourceIntf,
+                                           string @Mode )
+{
+    CLI
+    {
+        system-view
+
+        /* Replace mode – clear all existing NTP servers */
+        if ( @Mode == "Replace" )
+        {
+            undo ntp-service unicast-server
+        }
+
+        /* Add the new server – source interface is optional */
+        if ( @SourceIntf != "" )
+        {
+            ntp-service unicast-server @NTPServer source @SourceIntf
+        }
+        else
+        {
+            ntp-service unicast-server @NTPServer
+        }
+
+        quit
+    }
+}
