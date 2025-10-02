@@ -1,0 +1,30 @@
+# H3C remediation commands
+system-view
+header login %
+********************************************************************
+****                         PCCW     GDCN                      ****
+****                                                            ****
+****   - The system is to be logged in to or used only by       ****
+****     specifically authorized personnel                      ****
+****   - Any unauthorized use of the system is unlawful and     ****
+****     may be subject to civil and/or criminal penalties      ****
+****   - Use of the system is logged or monitored without       ****
+****     further notice, and that the resulting logs may be     ****
+****     used as evidence in court                              ****
+****                                                            ****
+****               UNAUTHORIZED ACCESS IS PROHIBITED            ****
+********************************************************************
+%
+line aux 0 2
+authentication-mode scheme
+user-role network-admin
+idle-timeout 5 0
+line vty 0 63
+authentication-mode scheme
+user-role network-operator
+protocol inbound ssh
+idle-timeout 5 0
+hwtacacs scheme
+snmp-agent community
+quit
+save

@@ -1,0 +1,59 @@
+---
+- name: "Analyze drift for category {{ category_name }}"
+  block:
+    - name: Normalize baseline configuration lines
+      set_fact:
+        baseline_lines: "{{ baseline_content.split('\n') | map('trim') | reject('match', '^!.*') | reject('match', '^#.*') | reject('equalto', '') | list }}"
+        running_lines: "{{ running_config_data.stdout.split('\n') | map('trim') | reject('match', '^!.*') | reject('match', '^#.*') | reject('equalto', '') | list }}"
+
+    - name: "Compare baseline vs running for {{ category_name }}"
+      set_fact:
+        missing_configs: "{{ baseline_lines | difference(running_lines) }}"
+        extra_configs: "{{ running_lines | difference(baseline_lines) if category_name != 'security' else [] }}"
+
+    - name: Find configuration differences (value mismatches)
+      set_fact:
+        different_configs: "{{ different_configs | default([]) + [{'baseline': item, 'running': running_item}] }}"
+      vars:
+        running_item: "{{ running_lines | select('match', '^' + (item.split()[0] | regex_escape) + '.*') | first | default('') }}"
+      loop: "{{ baseline_lines }}"
+      when: 
+        - running_lines | select('match', '^' + (item.split()[0] | regex_escape) + '.*') | list | length > 0
+        - running_lines | select('match', '^' + (item.split()[0] | regex_escape) + '.*') | first != item
+
+    - name: Initialize different_configs if not set
+      set_fact:
+        different_configs: []
+      when: different_configs is not defined
+
+    - name: "Calculate drift status for {{ category_name }}"
+      set_fact:
+        category_has_drift: "{{ (missing_configs | length > 0) or (extra_configs | length > 0) or (different_configs | length > 0) }}"
+
+    - name: Record category drift analysis
+      set_fact:
+        device_drift_analysis: "{{ device_drift_analysis | combine({category_name: category_analysis}) }}"
+        overall_device_drift: "{{ overall_device_drift or category_has_drift }}"
+      vars:
+        category_analysis:
+          missing_configs: "{{ missing_configs }}"
+          extra_configs: "{{ extra_configs }}"
+          different_configs: "{{ different_configs }}"
+          has_drift: "{{ category_has_drift }}"
+          baseline_lines: "{{ baseline_lines | length }}"
+          summary: "Missing {{ missing_configs | length }} baseline configuration(s){% if different_configs | length > 0 %}; Found {{ different_configs | length }} configuration difference(s){% endif %}{% if extra_configs | length > 0 %}; Found {{ extra_configs | length }} extra configuration(s){% endif %}"
+
+    - name: "Debug category analysis for {{ category_name }}"
+      debug:
+        msg: |
+          Category: {{ category_name }}
+          Baseline lines: {{ baseline_lines | length }}
+          Missing: {{ missing_configs | length }}
+          Different: {{ different_configs | length }}
+          Extra: {{ extra_configs | length }}
+          Has drift: {{ category_has_drift }}
+      when: ansible_verbosity >= 1
+
+  when: 
+    - baseline_content is defined
+    - baseline_content | length > 0

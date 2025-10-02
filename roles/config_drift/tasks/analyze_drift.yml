@@ -1,0 +1,70 @@
+---
+- name: "Analyze configuration drift for {{ inventory_hostname }}"
+  block:
+    - name: Normalize baseline configuration lines
+      set_fact:
+        baseline_lines: "{{ device_baseline_config.split('\n') | map('trim') | reject('match', '^!.*') | reject('match', '^#.*') | reject('equalto', '') | list }}"
+        running_lines: "{{ running_config.stdout.split('\n') | map('trim') | reject('match', '^!.*') | reject('match', '^#.*') | reject('equalto', '') | list }}"
+
+    - name: Extract key configuration sections from baseline
+      set_fact:
+        baseline_key_configs: "{{ baseline_lines | select('match', '^(service |banner |line |exec-timeout |transport |snmp-server |snmp-agent |radius-server |tacacs-server |header |user-role |idle-timeout |authentication-mode |protocol |hwtacacs |user-interface ).*') | list }}"
+
+    - name: Extract key configuration sections from running config
+      set_fact:
+        running_key_configs: "{{ running_lines | select('match', '^(service |banner |line |exec-timeout |transport |snmp-server |snmp-agent |radius-server |tacacs-server |header |user-role |idle-timeout |authentication-mode |protocol |hwtacacs |user-interface ).*') | list }}"
+
+    - name: Compare baseline vs running configuration
+      set_fact:
+        missing_configs: "{{ baseline_key_configs | difference(running_key_configs) }}"
+        extra_configs: []
+
+    - name: Initialize different_configs and compliant_configs lists
+      set_fact:
+        different_configs: []
+        compliant_configs: []
+
+    - name: Find configuration differences and compliant configs
+      set_fact:
+        different_configs: "{{ different_configs + [{'baseline': item, 'running': running_match, 'config_type': item.split()[0]}] if running_match != item and running_match != 'NOT FOUND' else different_configs }}"
+        compliant_configs: "{{ compliant_configs + [item] if running_match == item else compliant_configs }}"
+      vars:
+        config_pattern: "{{ item.split()[0] + ' ' + item.split()[1] if item.split() | length > 1 else item.split()[0] }}"
+        running_match: "{{ running_key_configs | select('match', '^' + (config_pattern | regex_escape) + '.*') | first | default('NOT FOUND') }}"
+      loop: "{{ baseline_key_configs }}"
+      when: 
+        - item not in missing_configs
+
+    - name: Calculate drift status
+      set_fact:
+        has_drift: "{{ (missing_configs | length > 0) or (different_configs | length > 0) }}"
+
+    - name: Record drift analysis
+      set_fact:
+        device_drift_analysis:
+          missing_configs: "{{ missing_configs }}"
+          extra_configs: "{{ extra_configs }}"
+          different_configs: "{{ different_configs }}"
+          compliant_configs: "{{ compliant_configs }}"
+          has_drift: "{{ has_drift }}"
+          baseline_lines: "{{ baseline_key_configs | length }}"
+          running_lines: "{{ running_key_configs | length }}"
+          summary: "Baseline configs: {{ baseline_key_configs | length }}, Compliant: {{ compliant_configs | length }}, Missing: {{ missing_configs | length }}{% if different_configs | length > 0 %}, Different: {{ different_configs | length }}{% endif %}"
+        overall_device_drift: "{{ has_drift }}"
+
+    - name: Debug drift analysis
+      debug:
+        msg: |
+          ========================================
+          DRIFT ANALYSIS: {{ inventory_hostname }}
+          ========================================
+          Baseline key configs: {{ baseline_key_configs | length }}
+          Running key configs: {{ running_key_configs | length }}
+          Compliant: {{ compliant_configs | length }}
+          Missing: {{ missing_configs | length }}
+          Different: {{ different_configs | length }}
+          Has drift: {{ has_drift }}
+          ========================================
+      when: ansible_verbosity >= 1
+
+  when: device_baseline_config | length > 0

@@ -1,41 +1,100 @@
 ---
-- name: Configuration Drift Detection and Remediation
-  hosts: network_devices
-  gather_facts: true
-  connection: ansible.netcommon.network_cli
+- name: Network Configuration Drift Detection and Remediation
+  hosts: all
+  gather_facts: yes
+  connection: network_cli
   become: yes
-  become_method: ansible.netcommon.enable
-
+  become_method: enable
+  
   vars:
-    perform_backup: "{{ perform_backup | default('yes') }}"
-    perform_remediation: "{{ perform_remediation | default('no') }}"
-    backup_path: "/opt/ansible/backups"  # Fixed: removed recursive template
-    git_repo_url: "{{ git_repo_url }}"
-    git_repo_branch: "{{ git_repo_branch | default('main') }}"
-    git_backup_repo: "{{ git_backup_repo }}"  # New: separate repo for backups
-    git_backup_branch: "{{ git_backup_branch | default('main') }}"
-    email_enabled: "{{ email_enabled | default('yes') }}"
+    # Playbook mode control
+    perform_remediation: false    # Set to true for remediation mode
+    perform_backup: false         # Set to true to backup configs
+    email_enabled: true          # Set to true to send email reports
+    save_html_report: true       # Set to true to save HTML reports
     
+    # Email configuration
+    email:
+      smtp_server: "smtp.pccw.com"
+      smtp_port: 25
+      from_address: "osp-alertmgr@pccw.com"
+      to_recipients: "kenny.wh.lo@pccw.com,mtam@redhat.com"
+    
+    # Pagination disable commands for different vendors
+    pagination_commands:
+      ios: "terminal length 0"
+      nxos: "terminal length 0"
+      eos: "terminal length 0"
+      comware: "screen-length disable"
+      ce: "screen-length 0 temporary"
+      vrp: "screen-length 0 temporary"
+
+    # Directory configuration
+    report_directory: "reports"  # Defined to fix undefined variable error
+    baseline_config_dir: "./baseline-configs"  # Ensure this points to the correct path; adjust if needed (e.g., absolute path like "/runner/project/baseline-configs")
+
   pre_tasks:
+    - name: Initialize variables
+      set_fact:
+        failed_devices: []
+        remediated_devices: []
+        drift_results: []
+        start_time: "{{ now(fmt='%Y-%m-%dT%H:%M:%SZ') }}"  # Use now() for consistent UTC
+        backup_date: "{{ now(fmt='%Y-%m-%d') }}"
+        timestamp: "{{ now(fmt='%Y-%m-%dT%H:%M:%SZ') | regex_replace(':', '-') }}"
+        execution_start_epoch: "{{ now(fmt='%s') }}"  # Use now() for epoch
+      run_once: true
+      delegate_to: localhost
+
+  tasks:
     - name: Set pagination disable command
-      ansible.builtin.set_fact:
-        pagination_cmd: "{{ 'terminal length 0' if 'cisco.ios' in ansible_network_os else 'screen-length disable' if 'h3c_open.comware' in ansible_network_os else 'screen-length 0 temporary' if 'ce' in ansible_network_os else '' }}"
+      set_fact:
+        pagination_cmd: "{{ pagination_commands[ansible_network_os.split('.')[-1]] | default('terminal length 0') }}"
 
-    # --- DISABLE PAGINATION ---
     - name: Disable pagination on devices
-      ansible.netcommon.cli_command:
+      cli_command:
         command: "{{ pagination_cmd }}"
-      when: pagination_cmd != ''
-      ignore_errors: yes  # In case not supported
+      ignore_errors: yes
 
-  roles:
-    - config_drift
+    - name: Execute configuration drift detection and remediation
+      include_role:
+        name: config_drift
+      vars:
+        device_hostname: "{{ inventory_hostname }}"
+        network_os: "{{ ansible_network_os }}"
 
   post_tasks:
-    - name: Send drift report email
-      include_role:
-        name: email_notification
-      vars:
-        email_subject: "Network Configuration Drift Report - {{ timestamp }}"
-        email_template: "config_drift_report.j2"
+    - name: Send email report
+      include_tasks: roles/config_drift/tasks/send_email_report.yml
+      run_once: true
       when: email_enabled | bool
+
+    - name: Calculate execution time and display final summary
+      debug:
+        msg: |
+          ================================================================================
+          FINAL EXECUTION SUMMARY
+          ================================================================================
+          Execution started: {{ start_time }}
+          Execution completed: {{ now(fmt='%Y-%m-%dT%H:%M:%SZ') }}
+          Total duration: {{ ((now(fmt='%s') | int) - (execution_start_epoch | int)) // 60 }} minutes {{ ((now(fmt='%s') | int) - (execution_start_epoch | int)) % 60 }} seconds
+          
+          Results:
+          - Total devices in inventory: {{ ansible_play_hosts_all | length }}
+          - Devices processed successfully: {{ drift_results | default([]) | length }}
+          - Devices with drift: {{ drift_results | default([]) | selectattr('has_drift', 'equalto', true) | list | length }}
+          - Compliant devices: {{ drift_results | default([]) | selectattr('has_drift', 'equalto', false) | list | length }}
+          - Failed devices: {{ failed_devices | default([]) | length }}
+          {% if perform_remediation | bool %}
+          - Remediated devices: {{ remediated_devices | default([]) | length }}
+          {% endif %}
+          
+          {% if email_enabled | bool %}
+          Email report sent to: {{ email.to_recipient }}
+          {% endif %}
+          {% if save_html_report | bool %}
+          HTML report saved to: {{ report_directory }}/drift_report_{{ backup_date }}_{{ timestamp }}.html
+          {% endif %}
+          ================================================================================
+      delegate_to: localhost
+      run_once: true

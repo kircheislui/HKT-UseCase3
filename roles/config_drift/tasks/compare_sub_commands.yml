@@ -1,0 +1,32 @@
+---
+- name: Normalize sub-command for comparison
+  set_fact:
+    normalized_baseline_sub: "{{ baseline_sub_command | trim }}"
+    matching_running_sub: "{{ running_sub_commands | selectattr('command', 'match', '^' + (baseline_sub_command.split()[0] | regex_escape) + '.*') | first | default(none) }}"
+
+- name: Handle missing sub-command
+  block:
+    - name: Add to missing configurations with context
+      set_fact:
+        missing_configs: "{{ missing_configs + [missing_config_entry] }}"
+      vars:
+        missing_config_entry:
+          parent: "{{ parent_context }}"
+          command: "{{ normalized_baseline_sub }}"
+          full_path: "{{ parent_context }} -> {{ normalized_baseline_sub }}"
+  when: matching_running_sub is none
+
+- name: Compare existing sub-commands
+  block:
+    - name: Check for configuration differences
+      set_fact:
+        different_configs: "{{ different_configs + [config_diff] }}"
+      vars:
+        config_diff:
+          baseline: "{{ parent_context }} -> {{ normalized_baseline_sub }}"
+          running: "{{ parent_context }} -> {{ matching_running_sub.command }}"
+          type: "sub_command"
+          context: "{{ parent_context }}"
+      when: normalized_baseline_sub != matching_running_sub.command
+
+  when: matching_running_sub is not none

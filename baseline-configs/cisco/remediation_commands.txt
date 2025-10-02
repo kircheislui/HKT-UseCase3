@@ -1,0 +1,27 @@
+# Cisco remediation commands
+configure terminal
+service password-encryption
+banner login ^
+********************************************************************
+****                         PCCW     CFO                       ****
+****                                                            ****
+****   - The system is to be logged in to or used only by       ****
+****     specifically authorized personnel                      ****
+****   - Any unauthorized use of the system is unlawful and     ****
+****     may be subject to civil and/or criminal penalties      ****
+****   - Use of the system is logged or monitored without       ****
+****     further notice, and that the resulting logs may be     ****
+****     used as evidence in court                              ****
+****                                                            ****
+****               UNAUTHORIZED ACCESS IS PROHIBITED            ****
+********************************************************************
+^
+line con 0
+exec-timeout 5 0
+line vty 0 4
+exec-timeout 5 0
+transport input ssh
+line vty 5 15
+transport input none
+end
+copy running-config startup-config

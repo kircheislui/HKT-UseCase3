@@ -21,18 +21,17 @@
 
   handlers:
     - name: Save configuration after port restart
-      ignore_errors: yes  # Handle cases where save might fail
+      ignore_errors: yes
       ansible.netcommon.cli_command:
         command: "{{ 'write' if 'cisco.ios' in ansible_network_os else 'save force' if 'h3c_open.comware' in ansible_network_os or 'ce' in ansible_network_os else '' }}"
-        prompt: "[HUAWEI]"  # Explicitly set prompt for HUAWEI
-        timeout: 60  # Increased timeout to handle slow prompt detection
+        prompt: "{{ '[HUAWEI]' if 'ce' in ansible_network_os else '[H3C]' if 'h3c_open.comware' in ansible_network_os else '' }}"
+        timeout: 60
 
   tasks:
-    # --- SET DEVICE-SPECIFIC COMMANDS ---
     - name: Set device-specific commands
       ansible.builtin.set_fact:
         ip_command: "{{ 'show ip interface brief' if 'cisco.ios' in ansible_network_os else 'display ip interface brief' }}"
-        arp_command: "{{ 'show arp' if 'cisco.ios' in ansible_network_os else 'display arp' }}"
+        arp_command: "{{ 'show arp' if 'cisco.ios' in ansible_network_os else 'display arp vlan ' + vlan_id if 'h3c_open.comware' in ansible_network_os else 'display arp' }}"
         ping_command: "{{ 'ping ' + ip_address if 'cisco.ios' in ansible_network_os else 'ping -c 1 ' + ip_address }}"
         mac_command: "{{ 'show mac address-table' if 'cisco.ios' in ansible_network_os else 'display mac-address' }}"
 
@@ -49,57 +48,78 @@
           - "MAC command: {{ mac_command }}"
           - "Pagination command: {{ pagination_cmd }}"
 
-    # --- DISABLE PAGINATION ---
     - name: Disable pagination on devices
       ansible.netcommon.cli_command:
         command: "{{ pagination_cmd }}"
       when: pagination_cmd != ''
-      ignore_errors: yes  # In case not supported
-      ignore_unreachable: yes  # Handle device failure
+      ignore_errors: yes
+      ignore_unreachable: yes
 
-    # --- PING TO POPULATE ARP AND MAC TABLES ---
     - name: Ping the IP to populate ARP and MAC tables
       ansible.netcommon.cli_command:
         command: "{{ ping_command }}"
       register: ping_output
       ignore_errors: yes
-      ignore_unreachable: yes  # Handle device failure
+      ignore_unreachable: yes
       when: ip_address != ''
       changed_when: false
-      timeout: 30  # Added timeout for flaky devices
+      timeout: 30
 
     - name: DEBUG - Show ping output
       ansible.builtin.debug:
         var: ping_output.stdout_lines
       when: ping_output.stdout_lines is defined
 
-    # --- FETCH ARP TABLE ---
     - name: Run command to get ARP details
       ansible.netcommon.cli_command:
         command: "{{ arp_command }}"
       register: arp_output
       when: ip_address != '' and mac_address == ''
       changed_when: false
-      timeout: 30
-      ignore_unreachable: yes  # Handle device failure
+      timeout: "{{ 60 if 'h3c_open.comware' in ansible_network_os else 30 }}"
+      ignore_unreachable: yes
+      ignore_errors: yes
 
     - name: DEBUG - Show raw ARP command output
       ansible.builtin.debug:
         var: arp_output.stdout_lines
       when: ip_address != '' and mac_address == '' and arp_output.stdout_lines is defined
 
-    # --- FILTER ARP FOR IP AND EXTRACT MAC ---
+    - name: DEBUG - Log ARP command failure
+      ansible.builtin.debug:
+        msg: "ARP command failed on {{ inventory_hostname }}: {{ arp_output.msg | default('No error message') }}"
+      when: ip_address != '' and mac_address == '' and arp_output.failed | default(false)
+
+    - name: Fallback ARP command for H3C if initial ARP fails
+      ansible.netcommon.cli_command:
+        command: "display arp"
+      register: arp_output_fallback
+      when: ip_address != '' and mac_address == '' and arp_output.failed | default(false) and 'h3c_open.comware' in ansible_network_os
+      changed_when: false
+      timeout: 60
+      ignore_unreachable: yes
+      ignore_errors: yes
+
+    - name: DEBUG - Show fallback ARP command output
+      ansible.builtin.debug:
+        var: arp_output_fallback.stdout_lines
+      when: arp_output_fallback.stdout_lines is defined
+
+    - name: Combine ARP output
+      ansible.builtin.set_fact:
+        arp_output_combined: "{{ arp_output.stdout_lines if arp_output.stdout_lines is defined and not arp_output.failed | default(false) else arp_output_fallback.stdout_lines | default([]) }}"
+      when: ip_address != '' and mac_address == ''
+
     - name: Find ARP entry for the given IP
       ansible.builtin.set_fact:
-        arp_line: "{{ arp_output.stdout_lines | select('search', ip_address) | list }}"
-      when: ip_address != '' and mac_address == '' and arp_output.stdout_lines is defined
+        arp_line: "{{ arp_output_combined | select('search', ip_address) | list }}"
+      when: ip_address != '' and mac_address == '' and arp_output_combined is defined
 
     - name: Extract MAC address from ARP entry
       ansible.builtin.set_fact:
         found_mac: "{{ arp_line[0] | regex_search('([0-9a-fA-F]{4}[\\.-][0-9a-fA-F]{4}[\\.-][0-9a-fA-F]{4})') | default('Not found') }}"
       when: ip_address != '' and mac_address == '' and arp_line is defined and arp_line | length > 0
 
-    # --- EXTRACT PORT FROM ARP FOR HUAWEI ---
     - name: Extract port from ARP entry for Huawei
       ansible.builtin.set_fact:
         arp_port: "{{ arp_line[0].split()[4] if 'ce' in ansible_network_os and arp_line[0].split() | length > 4 else 'Not found' }}"
@@ -128,7 +148,6 @@
         msg: "Query MAC for {{ inventory_hostname }}: {{ query_mac | default('N/A') }}"
       when: target_mac != 'Not found'
 
-    # --- QUERY MAC ADDRESS TABLE TO FIND PORT ---
     - name: Query MAC address table when MAC available
       ansible.netcommon.cli_command:
         command: "{{ mac_command }} {{ 'vlan ' + vlan_id if 'ce' in ansible_network_os or 'h3c_open.comware' in ansible_network_os else '' }} | include {{ query_mac | default(target_mac) }}"
@@ -136,7 +155,7 @@
       when: target_mac != 'Not found'
       changed_when: false
       timeout: 30
-      ignore_unreachable: yes  # Handle device failure
+      ignore_unreachable: yes
 
     - name: DEBUG - Show raw MAC table output
       ansible.builtin.debug:
@@ -150,7 +169,7 @@
       when: target_mac != 'Not found' and (mac_table.stdout_lines | select('search', query_mac | default(target_mac)) | list | length == 0) and 'ce' in ansible_network_os
       changed_when: false
       timeout: 30
-      ignore_unreachable: yes  # Handle device failure
+      ignore_unreachable: yes
 
     - name: DEBUG - Show fallback MAC table output
       ansible.builtin.debug:
@@ -177,7 +196,7 @@
       when: target_mac != 'Not found' and mac_line | length == 0 and 'ce' in ansible_network_os
       changed_when: false
       timeout: 30
-      ignore_unreachable: yes  # Handle device failure
+      ignore_unreachable: yes
 
     - name: DEBUG - Show full MAC table for Huawei
       ansible.builtin.debug:
@@ -209,7 +228,6 @@
         msg: "Extracted port: {{ found_port }} for MAC {{ query_mac | default(target_mac) }} on {{ inventory_hostname }}"
       when: target_mac != 'Not found'
 
-    # --- CHECK PORT TYPE ---
     - name: Check port type when port is found
       ansible.netcommon.cli_command:
         command: "{{ 
@@ -223,7 +241,7 @@
       failed_when: false
       when: found_port != 'Not found'
       timeout: 30
-      ignore_unreachable: yes  # Handle device failure
+      ignore_unreachable: yes
 
     - name: Fallback port type query for Huawei
       ansible.netcommon.cli_command:
@@ -233,7 +251,7 @@
       failed_when: false
       when: found_port != 'Not found' and 'ce' in ansible_network_os and (port_output.stdout_lines is not defined or port_output.stdout_lines | length == 0)
       timeout: 30
-      ignore_unreachable: yes  # Handle device failure
+      ignore_unreachable: yes
 
     - name: Combine port type output
       ansible.builtin.set_fact:
@@ -277,7 +295,6 @@
         msg: "Port {{ found_port }} on {{ inventory_hostname }} at {{ device_location }} is {{ port_type }}"
       when: found_port != 'Not found' and port_type != 'unknown'
 
-    # --- AGGREGATE PORT DATA FOR RESTART CONDITIONS ---
     - name: Collect port data for global aggregation
       ansible.builtin.set_fact:
         port_data: "{{ hostvars[inventory_hostname].get('port_data', []) | default([]) + [{'hostname': inventory_hostname, 'port': found_port, 'type': port_type | default('unknown')}] }}"
@@ -292,7 +309,6 @@
       when: template_mode == 'template2'
       delegate_to: localhost
 
-    # --- SET CONFIG COMMAND FOR PORT RESTART ---
     - name: Set config command for port restart for Cisco
       ansible.builtin.set_fact:
         config_command_cisco: "{{ ['interface ' + found_port, 'shutdown', 'no shutdown'] }}"
@@ -323,7 +339,6 @@
         msg: "Config commands for {{ inventory_hostname }}: {{ config_command_huawei }}"
       when: config_command_huawei is defined
 
-    # --- APPLY PORT RESTART (TEMPLATE 2) ---
     - name: Apply port restart for Cisco if not trunk (Template 2)
       ansible.netcommon.cli_command:
         command: "{{ item }}"
@@ -331,8 +346,8 @@
       when: "found_port != 'Not found' and port_type == 'access' and template_mode == 'template2' and 'cisco.ios' in ansible_network_os and access_ports | length == 1"
       register: config_result_cisco
       ignore_errors: yes
-      ignore_unreachable: yes  # Handle device failure
-      failed_when: false  # Prevent task failure from stopping playbook
+      ignore_unreachable: yes
+      failed_when: false
       changed_when: "'shutdown' in item or 'no shutdown' in item"
       notify: Save configuration after port restart
 
@@ -343,8 +358,8 @@
       when: "found_port != 'Not found' and port_type == 'access' and template_mode == 'template2' and 'h3c_open.comware' in ansible_network_os and access_ports | length == 1"
       register: config_result_h3c
       ignore_errors: yes
-      ignore_unreachable: yes  # Handle device failure
-      failed_when: false  # Prevent task failure from stopping playbook
+      ignore_unreachable: yes
+      failed_when: false
       changed_when: "'shutdown' in item or 'undo shutdown' in item"
       notify: Save configuration after port restart
 
@@ -355,8 +370,8 @@
       when: "found_port != 'Not found' and port_type == 'access' and template_mode == 'template2' and 'ce' in ansible_network_os and access_ports | length == 1"
       register: config_result_huawei
       ignore_errors: yes
-      ignore_unreachable: yes  # Handle device failure
-      failed_when: false  # Prevent task failure from stopping playbook
+      ignore_unreachable: yes
+      failed_when: false
       changed_when: "'shutdown' in item or 'undo shutdown' in item"
       notify: Save configuration after port restart
 
@@ -375,11 +390,10 @@
         var: "{{ 'config_result_cisco' if 'cisco.ios' in ansible_network_os and config_result_cisco is defined else 'config_result_h3c' if 'h3c_open.comware' in ansible_network_os and config_result_h3c is defined else 'config_result_huawei' if 'ce' in ansible_network_os and config_result_huawei is defined else 'config_result' }}"
       when: config_result_cisco is defined or config_result_h3c is defined or config_result_huawei is defined
 
-    # --- SAVE CONFIGURATION ---
     - name: Save configuration after port restart
       ansible.netcommon.cli_command:
         command: "{{ 'write' if 'cisco.ios' in ansible_network_os else 'save force' if 'h3c_open.comware' in ansible_network_os or 'ce' in ansible_network_os else '' }}"
-        delay: 2  # Add a 2-second delay to allow prompt stabilization
+        delay: 2
       when:
         - found_port != 'Not found'
         - port_type == 'access'
@@ -389,16 +403,14 @@
           (config_result_h3c is defined and not (config_result_h3c.results | select('failed') | list | length > 0)) or
           (config_result_huawei is defined and not (config_result_huawei.results | select('failed') | list | length > 0))
       ignore_errors: yes
-      ignore_unreachable: yes  # Handle device failure
-      timeout: 60  # Increased timeout to handle slow responses
+      ignore_unreachable: yes
+      timeout: 60
 
-    # --- COLLECT DEVICE DATA FOR EMAIL ---
     - name: Collect device data for email
       ansible.builtin.set_fact:
         device_data: "{{ hostvars[inventory_hostname].get('device_data', []) | default([]) + [{'hostname': inventory_hostname, 'port': found_port, 'port_type': port_type | default('unknown')}] }}"
         cacheable: yes
 
-    # --- TEMPLATE 1: SEND SINGLE EMAIL ---
     - name: Send email notification (Template 1)
       ansible.builtin.mail:
         host: "{{ email.smtp_server }}"
@@ -446,7 +458,6 @@
       delegate_to: localhost
       when: template_mode == 'template1'
 
-    # --- TEMPLATE 2: SEND EMAIL ---
     - name: Send email notification (Template 2)
       ansible.builtin.mail:
         host: "{{ email.smtp_server }}"
@@ -464,7 +475,7 @@
           {% set config_result = (hostvars[access_ports[0].hostname].config_results | default([]) | selectattr('hostname', 'equalto', access_ports[0].hostname) | first | default({})).result | default({}) %}
           {% if config_result.get('failed', False) %}
           Configuration failed: {{ config_result.get('msg', 'Unknown error') }}
-          {% elif not config_result %}
+          {% elif not config_result.changed %}
           Port restart was not applied.
           {% endif %}
           {% else %}
@@ -491,7 +502,8 @@
           Port Type: {{ dev_data.port_type | default('unknown') }}
           {% set config_result = (hostvars[device].config_results | default([]) | selectattr('hostname', 'equalto', device) | first | default({})).result | default({}) %}
           Note: {% if dev_data.port_type | default('unknown') == 'access' %}
-          Access port by IP / MAC located in this port{% if access_ports | length == 1 and not config_result.get('failed', False) and config_result.results is defined %} and port restarted{% else %} has not restarted{% endif %}
+          Access port by IP / MAC located in this port{% if access_ports | length == 1 and device == access_ports[0].hostname and config_result.changed and not config_result.get('failed', False) %} and port restarted{% else %} and port no restart
+          {% endif %}
           {% if config_result.get('failed', False) %}
           Configuration failed: {{ config_result.get('msg', 'Unknown error') }}
           {% endif %}
@@ -504,7 +516,6 @@
       delegate_to: localhost
       when: template_mode == 'template2'
 
-    # --- OUTPUT RESULTS ---
     - name: Display MAC and port for IP
       ansible.builtin.debug:
         msg: "MAC address {{ target_mac }} for IP {{ ip_address }} at location {{ device_location }} is on port {{ found_port | default('Not found') }}"

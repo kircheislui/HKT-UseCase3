@@ -1,0 +1,34 @@
+---
+- name: Find matching running config block
+  set_fact:
+    matching_running_block: "{{ running_config_blocks | selectattr('parent_command', 'equalto', baseline_block.parent_command) | first | default(none) }}"
+
+- name: Handle missing baseline block
+  block:
+    - name: Add to missing configurations
+      set_fact:
+        missing_configs: "{{ missing_configs + [baseline_block.parent_command] + baseline_block.sub_commands }}"
+  when: matching_running_block is none
+
+- name: Compare existing blocks in detail
+  block:
+    - name: Compare parent commands
+      set_fact:
+        different_configs: "{{ different_configs + [config_diff] }}"
+      vars:
+        config_diff:
+          baseline: "{{ baseline_block.parent_command }}"
+          running: "{{ matching_running_block.parent_command }}"
+          type: "parent_command"
+      when: baseline_block.parent_command != matching_running_block.parent_command
+
+    - name: Compare sub-commands with context
+      include_tasks: compare_sub_commands.yml
+      loop: "{{ baseline_block.sub_commands }}"
+      loop_control:
+        loop_var: baseline_sub_command
+      vars:
+        running_sub_commands: "{{ matching_running_block.sub_commands }}"
+        parent_context: "{{ baseline_block.parent_command }}"
+
+  when: matching_running_block is not none

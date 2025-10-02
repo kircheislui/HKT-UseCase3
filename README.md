@@ -90,3 +90,36 @@ For open source projects, say how it is licensed.
 
 ## Project status
 If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+
+# Network Configuration Baseline Management
+
+## Overview
+This directory contains baseline configurations for different network vendors. The system automatically detects vendor types and applies appropriate baselines.
+
+## Directory Structure
+baseline-configs/
+├── cisco/ # Cisco IOS/NX-OS/EOS devices
+├── h3c/ # H3C Comware devices
+├── huawei/ # Huawei VRP/CE devices
+
+## Adding New Baseline Items
+
+### 1. Adding Configuration Checks
+Create or edit files in the vendor-specific directory:
+- `baseline_security.txt` - Security-related configurations
+- `baseline_logging.txt` - Logging configurations
+- `baseline_snmp.txt` - SNMP configurations
+- `baseline_ntp.txt` - NTP configurations
+
+### 2. Adding Remediation Commands
+Edit `remediation_commands.txt` in the vendor directory with device-specific commands.
+
+### 3. Running the Playbook
+
+**Check Only Mode:**
+
+ansible-playbook useCase3.2_config_drift_check.yml -e "perform_remediation=false"
+
+**Check and Remediate Mode:**
+
+ansible-playbook useCase3.2_config_drift_check.yml -e "perform_remediation=true"

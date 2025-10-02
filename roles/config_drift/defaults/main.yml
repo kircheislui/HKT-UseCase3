@@ -1,0 +1,11 @@
+---
+# Default values for role
+perform_remediation: false
+perform_backup: false
+email_enabled: false
+save_html_report: true
+
+# Default directories
+baseline_config_dir: "{{ playbook_dir }}/baseline-configs"
+backup_directory: "{{ playbook_dir }}/backups"
+report_directory: "{{ playbook_dir }}/reports"

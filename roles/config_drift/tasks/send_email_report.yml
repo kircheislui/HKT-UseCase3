@@ -1,0 +1,34 @@
+---
+- name: Generate email subject with timestamp
+  set_fact:
+    email_subject: "Configuration Drift Report - {{ ansible_date_time.date | default(now().strftime('%Y-%m-%d')) }} - {{ drift_results | selectattr('has_drift', 'equalto', true) | list | length }} devices with drift"
+  delegate_to: localhost
+
+- name: Send drift detection email report
+  mail:
+    to: "{{ email.to_recipients }}"
+    from: "{{ email.from_address }}"
+    subject: "{{ email_subject }}"
+    body: "{{ html_email_report }}"
+    subtype: html
+    host: "{{ email.smtp_server }}"
+    port: "{{ email.smtp_port }}"
+    headers:
+      - "X-Report-Type=Configuration-Drift-Detection"
+      - "X-Generated-By=Ansible-AAP"
+      - "X-Report-Date={{ ansible_date_time.date | default(now().strftime('%Y-%m-%d')) }}"
+  delegate_to: localhost
+  ignore_errors: yes
+  register: email_result
+
+- name: Debug email sending result
+  debug:
+    msg: |
+      Email Status: {{ email_result.failed | ternary('FAILED', 'SUCCESS') }}
+      {% if email_result.failed %}
+      Error: {{ email_result.msg | default('Unknown error') }}
+      {% else %}
+      Email sent successfully to: {{ email.to_recipients }}
+      Subject: {{ email_subject }}
+      {% endif %}
+  delegate_to: localhost

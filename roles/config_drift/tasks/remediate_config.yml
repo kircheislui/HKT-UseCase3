@@ -1,69 +1,142 @@
 ---
-
-Not run
-
-- name: Remediate configuration drift
+- name: Perform configuration remediation
   block:
-    - name: Generate remediation commands from baseline
+    - name: Get remediation commands for vendor
       set_fact:
-        remediation_lines: "{{ baseline_lines_diff }}"
+        vendor_remediation_commands: "{{ remediation_commands[vendor_baseline_dir] | default([]) }}"
 
-    - name: Filter out comments and empty lines from remediation
-      set_fact:
-        remediation_commands: "{{ remediation_lines | select('match', '^[^!#\\s].*') | list }}"
+    - name: Debug remediation preparation
+      debug:
+        msg: |
+          ========================================
+          🔧 REMEDIATION MODE ACTIVATED
+          ========================================
+          Device: {{ inventory_hostname }}
+          Vendor: {{ vendor_baseline_dir }}
+          Available remediation commands: {{ vendor_remediation_commands | length }}
+          Drift detected: {{ overall_device_drift }}
+          Missing configs: {{ device_drift_analysis.missing_configs | length }}
+          Different configs: {{ device_drift_analysis.different_configs | length }}
+          ========================================
+
+    - name: Check if remediation commands available
+      debug:
+        msg: "⚠️ WARNING: No remediation commands found for vendor {{ vendor_baseline_dir }}"
+      when: vendor_remediation_commands | length == 0
 
     - name: Display remediation commands to be applied
       debug:
         msg: |
-          Remediation commands for {{ inventory_hostname }}:
-          {{ remediation_commands | join('\n') }}
-
-    - name: Apply configuration changes (dry run first)
-      cli_config:
-        config: "{{ remediation_commands | join('\n') }}"
-        diff_against: running
-      check_mode: yes
-      register: dry_run_result
-
-    - name: Confirm dry run results
-      debug:
-        msg: "Dry run completed successfully. Changes would be: {{ dry_run_result.diff | default('No changes detected') }}"
-
-    - name: Apply configuration changes
-      cli_config:
-        config: "{{ remediation_commands | join('\n') }}"
-        diff_against: running
-      register: config_result
+          Commands to be applied:
+          {{ vendor_remediation_commands | join('\n') }}
       when: 
-        - dry_run_result is succeeded
-        - remediation_commands | length > 0
+        - vendor_remediation_commands | length > 0
+        - ansible_verbosity >= 1
 
-    - name: Save configuration
+    - name: Apply remediation commands
+      cli_config:
+        config: "{{ vendor_remediation_commands | join('\n') }}"
+      register: remediation_result
+      when: vendor_remediation_commands | length > 0
+
+    - name: Save configuration after remediation (Cisco)
       cli_command:
-        command: "{{ save_config_command[ansible_network_os] }}"
-      when: config_result is succeeded
+        command: "write memory"
+      when:
+        - vendor_remediation_commands | length > 0
+        - remediation_result.changed | default(false)
+        - normalized_network_os in ['ios', 'nxos', 'eos']
+      ignore_errors: yes
 
-    - name: Update drift results with remediation status
-      set_fact:
-        drift_results: "{{ drift_results | map('combine', {'remediated': true} if item.hostname == inventory_hostname else item) | list }}"
-      when: config_result is succeeded
-
-    - name: Add to remediated devices list
+    - name: Update remediation status
       set_fact:
         remediated_devices: "{{ remediated_devices + [inventory_hostname] }}"
       delegate_to: localhost
-      when: config_result is succeeded
+      when: 
+        - remediation_result is defined
+        - remediation_result.changed | default(false)
+
+    - name: Update drift results with remediation status
+      set_fact:
+        drift_results: "{{ drift_results | map('combine', updated_result if item.hostname == inventory_hostname else {}) | list }}"
+      vars:
+        updated_result:
+          remediated: true
+          remediation_timestamp: "{{ ansible_date_time.iso8601 | default(now().strftime('%Y-%m-%dT%H:%M:%SZ')) }}"
+          remediation_successful: true
+      loop: "{{ drift_results }}"
+      loop_control:
+        loop_var: item
+      delegate_to: localhost
+      when: 
+        - remediation_result is defined
+        - remediation_result.changed | default(false)
+
+    - name: Wait for device to settle after remediation
+      pause:
+        seconds: 5
+      when:
+        - remediation_result is defined
+        - remediation_result.changed | default(false)
+
+    - name: Verify configuration after remediation
+      cli_command:
+        command: "{{ show_run_commands[normalized_network_os] | default('show running-config') }}"
+      register: post_remediation_config
+      vars:
+        show_run_commands:
+          ios: "show running-config"
+          nxos: "show running-config"
+          eos: "show running-config"
+          comware: "display current-configuration"
+          ce: "display current-configuration"
+          vrp: "display current-configuration"
+      when:
+        - remediation_result is defined
+        - remediation_result.changed | default(false)
+
+    - name: Save post-remediation configuration backup
+      copy:
+        content: "{{ post_remediation_config.stdout }}"
+        dest: "{{ backup_directory }}/{{ backup_date }}/{{ inventory_hostname }}_post_remediation_config.txt"
+      delegate_to: localhost
+      when:
+        - post_remediation_config is defined
+        - post_remediation_config.stdout is defined
+
+    - name: Re-analyze drift after remediation
+      include_tasks: analyze_drift_post.yml
+      vars:
+        running_config_data: "{{ post_remediation_config }}"
+      when: 
+        - post_remediation_config is defined
+        - post_remediation_config.stdout is defined
 
   rescue:
-    - name: Record remediation failure
+    - name: Handle remediation failure
       set_fact:
-        failed_devices: "{{ failed_devices + [failure_record] }}"
-      vars:
-        failure_record:
-          hostname: "{{ inventory_hostname }}"
-          error: "Remediation failed: {{ ansible_failed_result.msg | default('Unknown error') }}"
+        failed_devices: "{{ failed_devices + [inventory_hostname] }}"
       delegate_to: localhost
 
-    - name: Log remediation failure
+    - name: Update drift results with remediation failure
+      set_fact:
+        drift_results: "{{ drift_results | map('combine', updated_result if item.hostname == inventory_hostname else {}) | list }}"
+      vars:
+        updated_result:
+          remediated: false
+          remediation_successful: false
+          remediation_error: "{{ ansible_failed_result.msg | default('Unknown error during remediation') }}"
+          remediation_timestamp: "{{ ansible_date_time.iso8601 | default(now().strftime('%Y-%m-%dT%H:%M:%SZ')) }}"
+      loop: "{{ drift_results }}"
+      loop_control:
+        loop_var: item
+      delegate_to: localhost
+
+    - name: Debug remediation failure
       debug:
-        msg: "Failed to remediate {{ inventory_hostname }}: {{ ansible_failed_result.msg | default('Unknown error') }}"
+        msg: |
+          ❌ REMEDIATION FAILED
+          ========================================
+          Device: {{ inventory_hostname }}
+          Error: {{ ansible_failed_result.msg | default('Unknown error') }}
+          ========================================

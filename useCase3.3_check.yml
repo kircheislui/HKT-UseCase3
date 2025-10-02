@@ -1,127 +1,243 @@
 ---
-- name: HKT Template 1 - Check Current NTP and SNMP Configurations
-  hosts: network_devices
-  gather_facts: no
+- name: Automate Configuration Change (Use Case 3.3)
+  hosts: all
+  gather_facts: false
   vars:
-    backup_dir: "/var/tmp/hkt_backups"
-    report_dir: "/var/tmp/hkt_reports"
+    task: "{{ task_type | default('ntp') | lower }}"
+    custom_file: "{{ custom_file | default('') | string }}"
+    template_path: "config_template/{{ vendor | default('cisco') }}/{{ task }}.txt"
+    vendor: "{{ hostvars[inventory_hostname].get('vendor', 'cisco') | lower }}"
+    email_config:
+      smtp_server: "smtp.pccw.com"
+      smtp_port: 25
+      from_address: "osp-alertmgr@pccw.com"
+      to_recipients: "mtam@redhat.com"
+    pagination_commands:
+      cisco: "terminal length 0"
+      h3c: "screen-length disable"
+      huawei: "screen-length 0 temporary"
+    version_commands:
+      cisco: "show version"
+      h3c: "display version"
+      huawei: "display version"
 
   tasks:
-    - name: Get current timestamp
-      ansible.builtin.shell: date -u +"%Y-%m-%dT%H:%M%z"
-      register: timestamp_raw
+    - name: Debug inventory variables
+      debug:
+        msg: "Inventory variables for {{ inventory_hostname }}: {{ hostvars[inventory_hostname] }}"
+      # Verify all host variables, especially vendor
+
+    - name: Validate vendor variable
+      fail:
+        msg: "Vendor variable for {{ inventory_hostname }} is not set correctly. Expected 'h3c', 'huawei', or 'cisco', got '{{ vendor }}'. Check inventory file or group vars."
+      when: vendor not in ['cisco', 'h3c', 'huawei']
+
+    - name: Set timestamp manually
+      set_fact:
+        ansible_date_time: "{{ ansible_date_time | default({'iso8601': now().strftime('%Y-%m-%dT%H:%M:%SZ')}) }}"
+
+    - name: Set mode variable
+      set_fact:
+        mode: "{{ mode | default('add') | string }}"
+
+    - name: Set ntp_server variable
+      set_fact:
+        ntp_server: "{{ ntp_server | default('') }}"
+
+    - name: Set source_intf variable
+      set_fact:
+        source_intf: "{{ source_intf | default('') }}"
+
+    - name: Set old_snmp_community variable
+      set_fact:
+        old_snmp_community: "{{ old_snmp_community | default('') }}"
+
+    - name: Set new_snmp_community variable
+      set_fact:
+        new_snmp_community: "{{ new_snmp_community | default('') }}"
+
+    - name: Set type variable
+      set_fact:
+        type: "{{ type | default('RO') }}"
+
+    - name: Debug variable values
+      debug:
+        msg:
+          - "Mode: {{ mode }}"
+          - "NTP Server: {{ ntp_server }}"
+          - "Source Interface: {{ source_intf }}"
+          - "Old SNMP Community: {{ old_snmp_community }}"
+          - "New SNMP Community: {{ new_snmp_community }}"
+          - "Type: {{ type }}"
+
+    - name: Check shell plugin availability
+      debug:
+        msg: "Shell plugin: {{ ansible_shell_type | default('Not set') }}, Network CLI plugin: {{ ansible_network_cli_shell_type | default('Not set') }}"
+
+    - name: Test SSH connectivity
+      ansible.netcommon.cli_command:
+        command: "{{ version_commands[vendor] }}"
+      register: connectivity_result
+      connection: "{{ 'ansible.netcommon.network_cli' if vendor == 'cisco' else 'ansible.netcommon.ssh' }}"
+      vars:
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o KexAlgorithms=+diffie-hellman-group1-sha1 -o Ciphers=aes256-ctr,aes128-ctr -o HostKeyAlgorithms=+ssh-rsa"
+      timeout: 180
+      ignore_errors: yes
+
+    - name: Debug connectivity result
+      debug:
+        var: connectivity_result.stdout_lines
+      when: connectivity_result.stdout_lines is defined
+
+    - name: Enter system view for H3C/Huawei
+      ansible.netcommon.cli_command:
+        command: "system-view"
+      register: system_view_result
+      when: vendor in ['h3c', 'huawei']
+      connection: ansible.netcommon.ssh
+      timeout: 180
+      ignore_errors: yes
+
+    - name: Debug system view result
+      debug:
+        var: system_view_result.stdout_lines
+      when: system_view_result.stdout_lines is defined
+
+    - name: Disable pagination
+      ansible.netcommon.cli_command:
+        command: "{{ pagination_commands[vendor] }}"
+      register: pagination_result
+      when: vendor in ['h3c', 'huawei', 'cisco']
+      connection: "{{ 'ansible.netcommon.network_cli' if vendor == 'cisco' else 'ansible.netcommon.ssh' }}"
+      timeout: 180
+      ignore_errors: yes
+
+    - name: Debug pagination result
+      debug:
+        var: pagination_result.stdout_lines
+      when: pagination_result.stdout_lines is defined
+
+    - name: Check NTP status (H3C/Huawei)
+      ansible.netcommon.cli_command:
+        command: "display ntp-service status"
+      register: ntp_status
+      when: vendor in ['h3c', 'huawei']
+      connection: ansible.netcommon.ssh
+      timeout: 180
+      ignore_errors: yes
+
+    - name: Check NTP status (Cisco)
+      cisco.ios.ios_command:
+        commands: "show ntp status"
+      register: ntp_status
+      when: vendor == 'cisco'
+      connection: ansible.netcommon.network_cli
+      timeout: 180
+      ignore_errors: yes
+
+    - name: Check SNMP status (H3C/Huawei)
+      ansible.netcommon.cli_command:
+        command: "display snmp-agent community"
+      register: snmp_status
+      when: vendor in ['h3c', 'huawei']
+      connection: ansible.netcommon.ssh
+      timeout: 180
+      ignore_errors: yes
+
+    - name: Check SNMP status (Cisco)
+      cisco.ios.ios_command:
+        commands: "show snmp community"
+      register: snmp_status
+      when: vendor == 'cisco'
+      connection: ansible.netcommon.network_cli
+      timeout: 180
+      ignore_errors: yes
+
+    - name: Debug NTP and SNMP status
+      debug:
+        msg:
+          - "NTP Status: {{ ntp_status.stdout_lines | default([]) }}"
+          - "SNMP Status: {{ snmp_status.stdout_lines | default([]) }}"
+      when: ntp_status.stdout_lines is defined or snmp_status.stdout_lines is defined
+
+    - name: Gather config
+      block:
+        - name: Gather config (Cisco)
+          cisco.ios.ios_command:
+            commands: "show running-config"
+          register: backup_config
+          when: vendor == 'cisco'
+          connection: ansible.netcommon.network_cli
+          timeout: 180
+          ignore_errors: yes
+
+        - name: Gather config (H3C)
+          ansible.netcommon.cli_command:
+            command: "display current-configuration"
+          register: backup_config
+          when: vendor == 'h3c'
+          connection: ansible.netcommon.ssh
+          timeout: 180
+          ignore_errors: yes
+
+        - name: Gather config (Huawei)
+          ansible.netcommon.cli_command:
+            command: "display current-configuration"
+          register: backup_config
+          when: vendor == 'huawei'
+          connection: ansible.netcommon.ssh
+          timeout: 180
+          ignore_errors: yes
+
+    - name: Debug config output
+      debug:
+        var: backup_config.stdout_lines
+      when: backup_config.stdout_lines is defined
+
+    - name: Save backup to file
+      ansible.builtin.copy:
+        content: "{{ backup_config.stdout[0] if backup_config.stdout is defined else '' }}"
+        dest: "/backups/{{ inventory_hostname }}_{{ ansible_date_time.iso8601 }}"
       delegate_to: localhost
-      run_once: true
-      changed_when: false
+      when: backup_config.stdout is defined
 
-    - name: Set timestamp variables
-      ansible.builtin.set_fact:
-        timestamp: "{{ timestamp_raw.stdout | trim }}"
-        timestamp_temp: "{{ timestamp_raw.stdout | trim | replace(':', '') | replace('-', '') | replace('+', '') }}"
-        timestamp_short: "{{ timestamp_temp[:12] }}"
-
-    - name: Create backup and report directories on controller
-      file:
-        path: "{{ item }}"
-        state: directory
-      loop:
-        - "{{ backup_dir }}"
-        - "{{ report_dir }}"
-      delegate_to: localhost
-      run_once: true
-
-    - name: Backup current running config
+    - name: Retrieve and render template from Git
       block:
-        - name: Backup for Cisco
-          cisco.ios.ios_command:
-            commands: show running-config
-          register: running_config
-          when: ansible_network_os | default('unknown') == 'ios'
-
-        - name: Backup for H3C
-          h3c_open.comware.comware_command:
-            commands: display current-configuration
-          register: running_config
-          when: ansible_network_os | default('unknown') == 'comware'
-
-        - name: Backup for Huawei
-          ansible.netcommon.net_get:
-            command: display current-configuration
-          register: running_config
-          when: ansible_network_os | default('unknown') == 'ce'
-
-        - name: Save backup to file
-          copy:
-            content: "{{ running_config.stdout[0] }}"
-            dest: "{{ backup_dir }}/{{ inventory_hostname }}_{{ timestamp_short }}.cfg"
-          delegate_to: localhost
-          when: running_config.stdout is defined
-
-    - name: Gather current SNMP config
-      block:
-        - name: Check SNMP for Cisco
-          cisco.ios.ios_command:
-            commands: show snmp community
-          register: snmp_report
-          when: ansible_network_os | default('unknown') == 'ios'
-
-        - name: Check SNMP for H3C
-          h3c_open.comware.comware_command:
-            commands: display snmp-agent community
-          register: snmp_report
-          when: ansible_network_os | default('unknown') == 'comware'
-
-        - name: Check SNMP for Huawei
-          ansible.netcommon.net_get:
-            command: display snmp-agent community
-          register: snmp_report
-          when: ansible_network_os | default('unknown') == 'ce'
-
-    - name: Gather current NTP config
-      block:
-        - name: Check NTP for Cisco
-          cisco.ios.ios_command:
-            commands: show ntp associations
-          register: ntp_report
-          when: ansible_network_os | default('unknown') == 'ios'
-
-        - name: Check NTP for H3C
-          h3c_open.comware.comware_command:
-            commands: display ntp-service sessions
-          register: ntp_report
-          when: ansible_network_os | default('unknown') == 'comware'
-
-        - name: Check NTP for Huawei
-          ansible.netcommon.net_get:
-            command: display ntp-service sessions
-          register: ntp_report
-          when: ansible_network_os | default('unknown') == 'ce'
-
-    - name: Generate and save configuration report
-      block:
-        - name: Assemble report content
+        - name: Set custom file path
           set_fact:
-            report_content: |
-              # Ansible Playbook Technical Requirement Spec
-              ## HKT Use Case 3 Network Automation
-              ### Report for {{ inventory_hostname }}
-              #### Prepared by Red Hat Consulting
-              #### Date: {{ timestamp }}
+            custom_path: "{{ 'config_template/' + vendor + '/custom/' + (custom_file if custom_file | length > 0 else 'default.txt') }}"
+          when: task == 'custom'
 
-              **Host Details:**
-              - Hostname: {{ inventory_hostname }}
-              - Network OS: {{ ansible_network_os | default('Unknown') }}
-              - IP Address: {{ ansible_host | default('N/A') }}
-              - Report Generated: {{ timestamp }}
-
-              **Current Configurations:**
-              - **SNMP Configuration:**
-                {{ snmp_report.stdout | default('No SNMP data available') | indent(18) }}
-              - **NTP Configuration:**
-                {{ ntp_report.stdout | default('No NTP data available') | indent(18) }}
-
-        - name: Save report to file
-          copy:
-            content: "{{ report_content }}"
-            dest: "{{ report_dir }}/{{ inventory_hostname }}_config_report_{{ timestamp_short }}.txt"
+        - name: Read template file
+          ansible.builtin.slurp:
+            src: "{{ template_path if task != 'custom' else custom_path }}"
+          register: template_content
           delegate_to: localhost
+          ignore_errors: yes
+
+        - name: Replace placeholders in template
+          set_fact:
+            rendered_config: "{{ (template_content['content'] | b64decode) | replace('@Mode', mode) | replace('@NTPServer', ntp_server) | replace('@SourceIntf', source_intf) | replace('@SNMPCommunity', old_snmp_community) | replace('@new_SNMPCommunity', new_snmp_community) | replace('@Type', type) }}"
+          when: template_content['content'] is defined
+
+        - name: Save rendered config to temp file
+          ansible.builtin.copy:
+            content: "{{ rendered_config | default('') }}"
+            dest: "/tmp/rendered_config_{{ inventory_hostname }}.txt"
+          delegate_to: localhost
+          when: rendered_config is defined and rendered_config != ''
+
+    - name: Send email with rendered configuration
+      community.general.mail:
+        host: "{{ email_config.smtp_server }}"
+        port: "{{ email_config.smtp_port }}"
+        sender: "{{ email_config.from_address }}"
+        to: "{{ email_config.to_recipients }}"
+        subject: "Configuration Change Report for {{ inventory_hostname }} - {{ ansible_date_time.iso8601 }}"
+        body: "Please find the rendered configuration for {{ inventory_hostname }} attached. Task: {{ task }}. Generated at {{ ansible_date_time.iso8601 }}.\n\nNTP Status: {{ ntp_status.stdout_lines | default([]) | join('\n') }}\nSNMP Status: {{ snmp_status.stdout_lines | default([]) | join('\n') }}"
+        attach:
+          - "/tmp/rendered_config_{{ inventory_hostname }}.txt"
+      run_once: true
+      delegate_to: localhost
+      when: rendered_config is defined and rendered_config != ''
+      ignore_errors: yes

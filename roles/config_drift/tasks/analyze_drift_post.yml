@@ -1,0 +1,52 @@
+---
+- name: "Re-analyze configuration drift after remediation for {{ inventory_hostname }}"
+  block:
+    - name: Normalize post-remediation configuration lines
+      set_fact:
+        post_baseline_lines: "{{ device_baseline_config.split('\n') | map('trim') | reject('match', '^!.*') | reject('match', '^#.*') | reject('equalto', '') | list }}"
+        post_running_lines: "{{ running_config_data.stdout.split('\n') | map('trim') | reject('match', '^!.*') | reject('match', '^#.*') | reject('equalto', '') | list }}"
+
+    - name: Compare baseline vs post-remediation configuration
+      set_fact:
+        post_missing_configs: "{{ post_baseline_lines | difference(post_running_lines) }}"
+
+    - name: Find remaining configuration differences
+      set_fact:
+        post_different_configs: "{{ post_different_configs | default([]) + [{'baseline': item, 'running': running_item}] }}"
+      vars:
+        running_item: "{{ post_running_lines | select('match', '^' + (item.split()[0] | regex_escape) + '.*') | first | default('') }}"
+      loop: "{{ post_baseline_lines }}"
+      when: 
+        - post_running_lines | select('match', '^' + (item.split()[0] | regex_escape) + '.*') | list | length > 0
+        - post_running_lines | select('match', '^' + (item.split()[0] | regex_escape) + '.*') | first != item
+
+    - name: Initialize post_different_configs if not set
+      set_fact:
+        post_different_configs: []
+      when: post_different_configs is not defined
+
+    - name: Update drift results with post-remediation analysis
+      set_fact:
+        drift_results: "{{ drift_results | map('combine', updated_result if item.hostname == inventory_hostname else {}) | list }}"
+      vars:
+        updated_result:
+          post_remediation_drift:
+            missing_configs: "{{ post_missing_configs }}"
+            different_configs: "{{ post_different_configs }}"
+            has_drift: "{{ (post_missing_configs | length > 0) or (post_different_configs | length > 0) }}"
+            summary: "After remediation: Missing {{ post_missing_configs | length }}, Different {{ post_different_configs | length }}"
+      loop: "{{ drift_results }}"
+      loop_control:
+        loop_var: item
+      delegate_to: localhost
+
+    - name: Debug post-remediation analysis
+      debug:
+        msg: |
+          ========================================
+          POST-REMEDIATION ANALYSIS: {{ inventory_hostname }}
+          ========================================
+          Still missing: {{ post_missing_configs | length }}
+          Still different: {{ post_different_configs | length }}
+          Remediation fully successful: {{ (post_missing_configs | length == 0) and (post_different_configs | length == 0) }}
+          ========================================

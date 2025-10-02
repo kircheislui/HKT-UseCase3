@@ -1,0 +1,11 @@
+# Huawei remediation commands
+system-view
+user-interface console 0
+idle-timeout 5 0
+user-interface vty 0 4
+protocol inbound ssh
+idle-timeout 5 0
+hwtacacs-server
+snmp-agent community
+quit
+save

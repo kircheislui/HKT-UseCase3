@@ -1,44 +1,56 @@
 ---
-# Update the command mapping to match actual ansible_network_os values
-running_config_command:
+# Drift Detection Configuration
+perform_remediation: false
+email_enabled: true
+save_html_report: true
+
+# Email Configuration (using your team's structure)
+email:
+  smtp_server: "smtp.pccw.com"
+  smtp_port: 25
+  from_address: "osp-alertmgr@pccw.com"
+  to_recipients: "kenny.wh.lo@pccw.com,mtam@redhat.com"
+
+# Baseline Configuration
+baseline_config_dir: "{{ playbook_dir }}/baseline-configs"
+baseline_categories:
+  - security
+  - logging
+  - snmp
+  - access_control
+  - ntp
+
+# Network OS to directory mapping
+os_baseline_mapping:
+  ios: "cisco"
+  nxos: "cisco" 
+  eos: "cisco"
+  comware: "h3c"
+  ce: "huawei"
+  vrp: "huawei"
+
+# Configuration commands for different vendors
+config_commands:
   ios: "show running-config"
   nxos: "show running-config"
   eos: "show running-config"
   comware: "display current-configuration"
   ce: "display current-configuration"
+  vrp: "display current-configuration"
 
-save_config_command:
-  ios: "write memory"
-  nxos: "copy running-config startup-config"
-  eos: "write memory"
-  comware: "save"
-  ce: "save"
+# Backup configuration
+backup_directory: "{{ playbook_dir }}/backups"
+backup_date: "{{ ansible_date_time.date }}"
+timestamp: "{{ ansible_date_time.iso8601_basic_short }}"
 
-# Updated mapping to match actual network OS values from your test
+# Report configuration
+report_directory: "{{ playbook_dir }}/reports"
+
+# Baseline mapping for network OS
 baseline_mapping:
   ios: "Baseline_Cisco"
   nxos: "Baseline_Cisco"
   eos: "Baseline_Cisco"
-  comware: "Baseline_H3C"                    # For h3c_open.comware.comware
-  ce: "Baseline_Huawei"                      # For community.network.ce
-
-# Configuration sections to check for each OS
-config_sections:
-  ios:
-    - "service password-encryption"
-    - "banner login"
-    - "line con 0"
-    - "line vty"
-    - "snmp-server community"
-    - "tacacs-server host"
-  comware:
-    - "header login"
-    - "line aux"
-    - "line vty"
-    - "hwtacacs scheme"
-    - "snmp-agent community"
-  ce:
-    - "user-interface console"
-    - "user-interface vty"
-    - "hwtacacs-server"
-    - "snmp-agent community"
+  comware: "Baseline_H3C"
+  ce: "Baseline_Huawei"
+  vrp: "Baseline_Huawei"

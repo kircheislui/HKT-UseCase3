@@ -1,28 +1,27 @@
 ---
-# roles/config_drift/tasks/main.yml
-- name: Get current date and time
-  setup:
-    filter: ansible_date_time
-  delegate_to: localhost
-  run_once: true
-
 - name: Initialize drift detection variables
   set_fact:
     drift_results: []
     remediated_devices: []
     failed_devices: []
     baseline_configs: {}
-    timestamp: "{{ ansible_date_time.iso8601 | regex_replace(':', '-') }}"
-    backup_date: "{{ ansible_date_time.date }}"
+    timestamp: "{{ ansible_date_time.iso8601 | default(now().strftime('%Y-%m-%dT%H:%M:%SZ')) | regex_replace(':', '-') }}"
+    backup_date: "{{ ansible_date_time.date | default(now().strftime('%Y-%m-%d')) }}"
 
 - name: Create local backup directory
   file:
-    path: "{{ backup_path }}/{{ backup_date }}"
+    path: "{{ backup_directory }}/{{ backup_date }}"
     state: directory
-    mode: '0755'
   delegate_to: localhost
   run_once: true
   when: perform_backup | bool
+
+- name: Create reports directory
+  file:
+    path: "{{ report_directory }}"
+    state: directory
+  delegate_to: localhost
+  run_once: true
 
 - name: Retrieve baseline configurations
   include_tasks: retrieve_baseline.yml
@@ -31,11 +30,13 @@
 - name: Process each device for drift detection
   include_tasks: drift_detection.yml
 
-#- name: Commit and push backups to Git
-#  include_tasks: commit_backups.yml
-#  run_once: true
-#  when: perform_backup | bool
-#
-#- name: Generate drift summary
-#  include_tasks: generate_summary.yml
-#  run_once: true
+- name: Perform remediation if enabled and drift detected
+  include_tasks: remediate_config.yml
+  when: 
+    - perform_remediation | bool
+    - overall_device_drift | bool
+
+- name: Generate comprehensive reports
+  include_tasks: generate_report.yml
+  run_once: true  # Removed delegate_to, as tasks inside handle it
+  when: drift_results is defined and drift_results | length > 0
