@@ -48,9 +48,9 @@
       delegate_to: localhost
 
   tasks:
-    - name: Set pagination disable command
-      set_fact:
-        pagination_cmd: "{{ pagination_commands[ansible_network_os.split('.')[-1]] | default('terminal length 0') }}"
+#    - name: Set pagination disable command
+#      set_fact:
+#        pagination_cmd: "{{ pagination_commands[ansible_network_os.split('.')[-1]] | default('terminal length 0') }}"
 
 #    - name: Disable pagination on devices
 #      cli_command:
