@@ -1,12 +1,12 @@
 ---
 - name: Debug network OS detection
   debug:
-    msg: "Device: {{ inventory_hostname }}, Network OS: {{ _ansible_network_os }}"
+    msg: "Device: {{ inventory_hostname }}, Network OS: {{ ansible_network_os }}"
 
 - block:
     - name: Normalize network OS for command lookup
       set_fact:
-        normalized_network_os: "{{ (_ansible_network_os | default('ios')).split('.')[-1] }}"
+        normalized_network_os: "{{ (ansible_network_os | default('ios')).split('.')[-1] }}"
 
     - name: Debug normalized network OS
       debug:
@@ -58,14 +58,14 @@
         device_baseline_config: "{{ lookup('file', baseline_config_dir + '/' + vendor_baseline_dir + '/baseline_config.txt') | default('') }}"
       when: baseline_config_dir is defined and vendor_baseline_dir != 'unknown'
 
-    - name: Debug baseline mapping details
+    - name: Debug loaded baseline content
       debug:
         msg: |
           Device: {{ inventory_hostname }}
-          Normalized OS: {{ normalized_network_os }}
-          Vendor directory: {{ vendor_baseline_dir }}
-          Baseline found: {{ (device_baseline_config | length > 0) }}
-          Baseline lines: {{ device_baseline_config.split('\n') | length if device_baseline_config | length > 0 else 0 }}
+          Baseline file: {{ baseline_config_dir }}/{{ vendor_baseline_dir }}/baseline_config.txt
+          Content: {{ device_baseline_config | default('EMPTY') }}
+          Lines: {{ device_baseline_config.split('\n') | length if device_baseline_config | length > 0 else 0 }}
+      when: baseline_config_dir is defined and vendor_baseline_dir != 'unknown'
 
     - name: Initialize drift analysis
       set_fact:
@@ -91,7 +91,7 @@
 
     - name: Record comprehensive drift results for each device
       set_fact:
-        drift_results: "{{ drift_results + [device_result] }}"
+        drift_results: "{{ (hostvars['localhost'].drift_results | default([])) + [device_result] }}"
       vars:
         device_result:
           hostname: "{{ inventory_hostname }}"
@@ -119,7 +119,7 @@
   rescue:
     - name: Record failed device
       set_fact:
-        failed_devices: "{{ (failed_devices | default([])) + [inventory_hostname] }}"
+        failed_devices: "{{ (hostvars['localhost'].failed_devices | default([])) + [inventory_hostname] }}"
       delegate_to: localhost
 
     - name: Debug failure
@@ -128,10 +128,10 @@
 
     - name: Record partial result for failed device
       set_fact:
-        drift_results: "{{ drift_results + [{'hostname': inventory_hostname, 'network_os': normalized_network_os | default('unknown'), 'has_drift': null, 'baseline_found': false, 'drift_details': {'summary': 'Scan failed'}, 'error': ansible_failed_result.msg | default('Unknown error')}] }}"
+        drift_results: "{{ (hostvars['localhost'].drift_results | default([])) + [{'hostname': inventory_hostname, 'network_os': normalized_network_os | default('unknown'), 'has_drift': null, 'baseline_found': false, 'drift_details': {'summary': 'Scan failed'}, 'error': ansible_failed_result.msg | default('Unknown error')}] }}"
       delegate_to: localhost
 
     - name: Debug processed devices
       debug:
-        msg: "Processed devices in drift_results: {{ drift_results | default([]) | length }}, Failed devices: {{ failed_devices | default([]) | length }}"
+        msg: "Processed devices in drift_results: {{ hostvars['localhost'].drift_results | default([]) | length }}, Failed devices: {{ hostvars['localhost'].failed_devices | default([]) | length }}"
       delegate_to: localhost
