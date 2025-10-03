@@ -1,8 +1,4 @@
 ---
-# Drift Detection Configuration
-perform_remediation: false
-email_enabled: true
-save_html_report: true
 
 # Email Configuration (using your team's structure)
 email:
