@@ -77,7 +77,7 @@
   failed_when: git_commit_result.rc != 0 and git_commit_result.rc != 1  # rc=1 means no changes
 
 - name: Push backup to remote Git repository
-  command: git push origin "{{ git_branch }}"  # Or master, depending on your branch
+  command: git push origin {{ git_branch }}  # Or master, depending on your branch
   args:
     chdir: "{{ playbook_dir }}/roles/config_drift/backup"
   delegate_to: localhost
