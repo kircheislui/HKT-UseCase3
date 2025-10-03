@@ -1,0 +1,54 @@
+---
+
+# Email Configuration (using your team's structure)
+email:
+  smtp_server: "smtp.pccw.com"
+  smtp_port: 25
+  from_address: "osp-alertmgr@pccw.com"
+  to_recipients: "kenny.wh.lo@pccw.com,mtam@redhat.com"
+
+# Baseline Configuration
+baseline_config_dir: "{{ playbook_dir }}/baseline-configs"
+baseline_categories:
+  - security
+  - logging
+  - snmp
+  - access_control
+  - ntp
+
+# Network OS to directory mapping
+os_baseline_mapping:
+  ios: "cisco"
+  nxos: "cisco" 
+  eos: "cisco"
+  comware: "h3c"
+  ce: "huawei"
+  vrp: "huawei"
+
+# Configuration commands for different vendors
+config_commands:
+  ios: "show running-config"
+  nxos: "show running-config"
+  eos: "show running-config"
+  comware: "display current-configuration"
+  ce: "display current-configuration"
+  vrp: "display current-configuration"
+
+# Backup configuration
+backup_directory: "{{ playbook_dir }}/backups"
+backup_date: "{{ ansible_date_time.date }}"
+timestamp: "{{ ansible_date_time.iso8601_basic_short }}"
+
+# Report configuration
+report_directory: "{{ playbook_dir }}/reports"
+
+# Baseline mapping for network OS
+baseline_mapping:
+  ios: "Baseline_Cisco"
+  nxos: "Baseline_Cisco"
+  eos: "Baseline_Cisco"
+  comware: "Baseline_H3C"
+  ce: "Baseline_Huawei"
+  vrp: "Baseline_Huawei"
+
+#git_url: 'git@10.168.172.132:rhgary/hkt-usecase3.git'

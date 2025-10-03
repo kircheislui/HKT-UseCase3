@@ -11,14 +11,54 @@
     dest: "{{ playbook_dir }}/roles/config_drift/backup/{{ inventory_hostname }}/{{ inventory_hostname }}_backup_{{ timestamp }}.txt"
   delegate_to: localhost
 
+- name: create direcotry
+  file:
+    path: "{{ playbook_dir }}/.ssh"
+    state: directory
+  delegate_to: localhost
+
+- name: create temp file
+  tempfile:
+    path: "{{ playbook_dir }}/.ssh"
+  register: git_temp_file
+  delegate_to: localhost
+
+- name: copy key to temp file
+  copy:
+    content: "{{ git_key }}"
+    dest: "{{ git_temp_file.path }}"
+  delegate_to: localhost
+
 - name: Initialize Git repository if not exists
   command: git init
   args:
     chdir: "{{ playbook_dir }}/roles/config_drift/backup"
+    creates: "{{ playbook_dir }}/roles/config_drift/backup/.git"
   delegate_to: localhost
   register: git_init_result
   changed_when: git_init_result.rc == 0
-  failed_when: false
+
+- name: Set Git remote if not set
+  command: git remote add origin git@github.com:yourusername/config-backups.git  # Replace with your repo SSH URL
+  args:
+    chdir: "{{ playbook_dir }}/roles/config_drift/backup"
+  delegate_to: localhost
+  register: git_remote_result
+  changed_when: git_remote_result.rc == 0
+  failed_when: git_remote_result.rc != 0 and not git_remote_result.stderr | regex_search('already exists')
+  ignore_errors: true  # Ignore if already set
+
+- name: Set Git user name
+  command: git config user.name "{{ git_username }}"
+  args:
+    chdir: "{{ playbook_dir }}/roles/config_drift/backup"
+  delegate_to: localhost
+
+- name: Set Git user email
+  command: git config user.email "{{ git_email }}"
+  args:
+    chdir: "{{ playbook_dir }}/roles/config_drift/backup"
+  delegate_to: localhost
 
 - name: Add backup files to Git
   command: git add .
@@ -34,17 +74,15 @@
   delegate_to: localhost
   register: git_commit_result
   changed_when: git_commit_result.rc == 0
-  failed_when: git_commit_result.rc != 0 and not git_commit_result.rc == 1  # 1 means no changes, which is okay
+  failed_when: git_commit_result.rc != 0 and git_commit_result.rc != 1  # rc=1 means no changes
 
 - name: Push backup to remote Git repository
-  command: git push origin main
+  command: git push origin "{{ git_branch }}"  # Or master, depending on your branch
   args:
     chdir: "{{ playbook_dir }}/roles/config_drift/backup"
   delegate_to: localhost
   when: 
     - perform_backup | bool
-    - git_commit_result.rc == 0
-  environment:
-    GIT_SSH_COMMAND: "ssh -i /path/to/your/ssh/key"  # Replace with your SSH key path
-    GIT_REMOTE_URL: "git@github.com:yourusername/your-repo.git"  # Replace with your Git repo URL
-  ignore_errors: true  # Handle if no remote is set yet
+    - git_commit_result.changed
+  register: git_push_result
+  failed_when: git_push_result.rc != 0
