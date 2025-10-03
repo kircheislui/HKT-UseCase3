@@ -39,7 +39,7 @@
   changed_when: git_init_result.rc == 0
 
 - name: Set Git remote if not set
-  command: git remote add origin git@github.com:yourusername/config-backups.git  # Replace with your repo SSH URL
+  command: git remote add origin {{ git_url }}  # Replace with your repo SSH URL
   args:
     chdir: "{{ playbook_dir }}/roles/config_drift/backup"
   delegate_to: localhost
