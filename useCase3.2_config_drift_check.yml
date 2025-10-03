@@ -9,7 +9,7 @@
   
   vars:
     # Playbook mode control
-    perform_remediation: false    # Set to true for remediation mode
+    perform_remediation: true    # Set to true for remediation mode
     perform_backup: true         # Set to true to backup configs
     email_enabled: true          # Set to true to send email reports
     save_html_report: true       # Set to true to save HTML reports
