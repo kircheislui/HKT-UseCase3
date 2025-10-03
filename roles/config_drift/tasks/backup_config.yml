@@ -1,0 +1,50 @@
+---
+- name: Create backup directory for device
+  file:
+    path: "{{ playbook_dir }}/roles/config_drift/backup/{{ inventory_hostname }}"
+    state: directory
+  delegate_to: localhost
+
+- name: Backup running configuration
+  copy:
+    content: "{{ running_config.stdout }}"
+    dest: "{{ playbook_dir }}/roles/config_drift/backup/{{ inventory_hostname }}/{{ inventory_hostname }}_backup_{{ timestamp }}.txt"
+  delegate_to: localhost
+
+- name: Initialize Git repository if not exists
+  command: git init
+  args:
+    chdir: "{{ playbook_dir }}/roles/config_drift/backup"
+  delegate_to: localhost
+  register: git_init_result
+  changed_when: git_init_result.rc == 0
+  failed_when: false
+
+- name: Add backup files to Git
+  command: git add .
+  args:
+    chdir: "{{ playbook_dir }}/roles/config_drift/backup"
+  delegate_to: localhost
+  when: perform_backup | bool
+
+- name: Commit backup files to Git
+  command: git commit -m "Backup for {{ inventory_hostname }} at {{ timestamp }}"
+  args:
+    chdir: "{{ playbook_dir }}/roles/config_drift/backup"
+  delegate_to: localhost
+  register: git_commit_result
+  changed_when: git_commit_result.rc == 0
+  failed_when: git_commit_result.rc != 0 and not git_commit_result.rc == 1  # 1 means no changes, which is okay
+
+- name: Push backup to remote Git repository
+  command: git push origin main
+  args:
+    chdir: "{{ playbook_dir }}/roles/config_drift/backup"
+  delegate_to: localhost
+  when: 
+    - perform_backup | bool
+    - git_commit_result.rc == 0
+  environment:
+    GIT_SSH_COMMAND: "ssh -i /path/to/your/ssh/key"  # Replace with your SSH key path
+    GIT_REMOTE_URL: "git@github.com:yourusername/your-repo.git"  # Replace with your Git repo URL
+  ignore_errors: true  # Handle if no remote is set yet

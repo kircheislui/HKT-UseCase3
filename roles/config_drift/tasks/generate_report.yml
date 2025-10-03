@@ -18,6 +18,7 @@
       {% if perform_remediation | bool %}
       | Devices Remediated:    {{ '%2d' | format( (remediated_devices | default([]) | length | int) ) }}                |
       | Remediation Success:   {{ '%2d' | format( (drift_results | default([]) | selectattr('remediation_successful', 'defined') | selectattr('remediation_successful', 'equalto', true) | list | length | int) ) }}                |
+      | Restored Devices:      {{ '%2d' | format( (drift_results | default([]) | selectattr('restored', 'defined') | selectattr('restored', 'equalto', true) | list | length | int) ) }}                |
       {% endif %}
       +-------------------------------------------+
 
@@ -49,9 +50,13 @@
       Compliant: {{ result.drift_details.compliant_configs | default([]) | length }}
       Missing: {{ result.drift_details.missing_configs | default([]) | length }}
       Different: {{ result.drift_details.different_configs | default([]) | length }}
-      {% if perform_remediation | bool and result.remediated %}
+      {% if perform_remediation | bool %}
+      {% if result.remediated %}
       Remediation: {{ result.remediation_successful | ternary('Successful', 'Partial') }}
       Post-Remediation: {{ result.post_remediation_drift.summary | default('N/A') }}
+      {% elif result.restored %}
+      Restoration: Performed due to remediation failure
+      {% endif %}
       {% endif %}
       {% endif %}
       
@@ -60,7 +65,7 @@
       {% for config in result.drift_details.missing_configs %}
       [MISSING] {{ config }}
          Status: NOT FOUND on device
-         Action: {{ perform_remediation | ternary('Remediated', 'NEEDS TO BE ADDED') }}
+         Action: {{ perform_remediation | ternary('Remediated', 'NEEDS TO BE ADDED') if not result.restored else 'Restored' }}
       {% endfor %}
       
       Configuration Differences ({{ result.drift_details.different_configs | default([]) | length }}):
@@ -68,7 +73,7 @@
       [DIFFERENT] {{ diff.config_type }}
          Baseline: {{ diff.baseline }}
          Running: {{ diff.running }}
-         Action: {{ perform_remediation | ternary('Remediated', 'Needs update') }}
+         Action: {{ perform_remediation | ternary('Remediated', 'Needs update') if not result.restored else 'Restored' }}
       {% endfor %}
       {% endif %}
       ================================================================================
@@ -132,6 +137,7 @@
               {% if perform_remediation | bool %}
               <tr><td>Devices Remediated:</td><td>{{ remediated_devices | default([]) | length | int }}</td></tr>
               <tr><td>Remediation Success:</td><td>{{ drift_results | default([]) | selectattr('remediation_successful', 'defined') | selectattr('remediation_successful', 'equalto', true) | list | length | int }}</td></tr>
+              <tr><td>Restored Devices:</td><td>{{ drift_results | default([]) | selectattr('restored', 'defined') | selectattr('restored', 'equalto', true) | list | length | int }}</td></tr>
               {% endif %}
           </table>
 
@@ -188,9 +194,14 @@
               <p><strong>Compliant:</strong> {{ result.drift_details.compliant_configs | default([]) | length }}</p>
               <p><strong>Missing:</strong> {{ result.drift_details.missing_configs | default([]) | length }}</p>
               <p><strong>Different:</strong> {{ result.drift_details.different_configs | default([]) | length }}</p>
-              {% if perform_remediation | bool and result.remediated %}
+              {% if perform_remediation | bool %}
+              {% if result.remediated %}
               <p><strong>Remediation:</strong> {{ result.remediation_successful | ternary('Successful', 'Partial') }}</p>
               <p><strong>Post-Remediation:</strong> {{ result.post_remediation_drift.summary | default('N/A') }}</p>
+              {% elif result.restored %}
+              <p><strong>Restoration:</strong> Performed due to remediation failure</p>
+              {% endif %}
+              {% endif %}
               {% endif %}
               
               {% if result.drift_details.compliant_configs | default([]) | length > 0 %}

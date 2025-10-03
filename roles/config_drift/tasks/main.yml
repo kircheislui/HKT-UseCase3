@@ -32,11 +32,23 @@
   delegate_to: localhost
   run_once: true
 
+- name: Perform backup before remediation
+  include_tasks: backup_config.yml
+  when: perform_backup | bool and perform_remediation | bool
+
 - name: Perform remediation if enabled and drift detected
   include_tasks: remediate_config.yml
   when: 
     - perform_remediation | bool
     - overall_device_drift | bool
+  register: remediation_result
+  ignore_errors: true
+
+- name: Restore backup if remediation fails
+  include_tasks: restore_config.yml
+  when: 
+    - perform_remediation | bool
+    - remediation_result is failed
 
 - name: Generate comprehensive reports
   include_tasks: generate_report.yml

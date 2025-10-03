@@ -1,0 +1,16 @@
+---
+- name: Restore backup configuration
+  copy:
+    src: "{{ playbook_dir }}/roles/config_drift/backup/{{ inventory_hostname }}/{{ inventory_hostname }}_backup_{{ timestamp }}.txt"
+    dest: "/tmp/{{ inventory_hostname }}_restored_config.txt"
+  delegate_to: localhost
+  when: perform_backup | bool
+
+- name: Apply restored configuration
+  debug:
+    msg: "Restoration not implemented yet for {{ inventory_hostname }}. Add cli_command or similar task here."
+  # Example (to be completed):
+  # - name: Apply restored config
+  #   cli_command:
+  #     command: "{{ lookup('file', '/tmp/{{ inventory_hostname }}_restored_config.txt') }}"
+  #   when: perform_backup | bool
