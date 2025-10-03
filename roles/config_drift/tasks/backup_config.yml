@@ -11,23 +11,27 @@
     dest: "{{ playbook_dir }}/roles/config_drift/backup/{{ inventory_hostname }}/{{ inventory_hostname }}_backup_{{ timestamp }}.txt"
   delegate_to: localhost
 
-- name: create direcotry
+- name: Create .ssh directory
   file:
     path: "{{ playbook_dir }}/.ssh"
     state: directory
   delegate_to: localhost
 
-- name: create temp file
+- name: Create temp file for SSH key
   tempfile:
+    state: file
     path: "{{ playbook_dir }}/.ssh"
+    suffix: _git_key
   register: git_temp_file
   delegate_to: localhost
 
-- name: copy key to temp file
+- name: Copy key to temp file
   copy:
     content: "{{ git_key }}"
     dest: "{{ git_temp_file.path }}"
+    mode: '0600'
   delegate_to: localhost
+  no_log: true
 
 - name: Initialize Git repository if not exists
   command: git init
@@ -74,15 +78,32 @@
   delegate_to: localhost
   register: git_commit_result
   changed_when: git_commit_result.rc == 0
-  failed_when: git_commit_result.rc != 0 and git_commit_result.rc != 1  # rc=1 means no changes
+  failed_when: git_commit_result.rc != 0 and git_commit_result.rc != 1 
 
-- name: Push backup to remote Git repository
-  command: git push origin {{ git_branch }}  # Or master, depending on your branch
+- name: Rename default branch to main if necessary
+  command: git branch -M {{ git_branch }}
   args:
     chdir: "{{ playbook_dir }}/roles/config_drift/backup"
   delegate_to: localhost
+  when: git_commit_result.changed
+  ignore_errors: true  # Ignore if branch already named correctly
+
+- name: Push backup to remote Git repository
+  command: git push -u origin {{ git_branch }}
+  args:
+    chdir: "{{ playbook_dir }}/roles/config_drift/backup"
+  delegate_to: localhost
+  environment:
+    GIT_SSH_COMMAND: "ssh -i {{ git_temp_file.path }} -o StrictHostKeyChecking=no"
   when: 
     - perform_backup | bool
     - git_commit_result.changed
   register: git_push_result
   failed_when: git_push_result.rc != 0
+
+- name: Clean up temp SSH key file
+  file:
+    path: "{{ git_temp_file.path }}"
+    state: absent
+  delegate_to: localhost
+  no_log: true
