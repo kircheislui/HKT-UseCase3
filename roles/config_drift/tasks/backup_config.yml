@@ -1,128 +1,88 @@
 ---
+
+- name: Create tempory folder for git
+  file: 
+    path: "{{ playbook_dir }}/git_folder_temp"
+    state: directory
+  run_once: true
+  delegate_to: localhost
+
+- name: Clone from server
+  command: "git clone https://{{ git_username }}:{{ git_token }}@{{ git_server }}/{{ git_username}}/{{ git_repo_name }}.git"
+  args:
+    chdir: "{{ playbook_dir }}/git_folder_temp"
+  delegate_to: localhost
+  register: git_clone_result
+  run_once: true
+  changed_when: git_clone_result.rc == 0
+
+- name: Checkout branch
+  command: "git checkout -b {{ git_branch }}"
+  args:
+    chdir: "{{ playbook_dir }}/git_folder_temp/{{ git_repo_name }}"
+  delegate_to: localhost
+  run_once: true
+
+- name: pull from branch
+  command: "git pull origin {{ git_branch }}"
+  args:
+    chdir: "{{ playbook_dir }}/git_folder_temp/{{ git_repo_name }}"
+  delegate_to: localhost
+  run_once: true
+
+- name: Set user name
+  command: "git config user.name {{ git_username }}"
+  args:
+    chdir: "{{ playbook_dir }}/git_folder_temp/{{ git_repo_name }}"
+  delegate_to: localhost
+  run_once: true
+
+- name: Set user email
+  command: "git config user.email {{ git_email }}"
+  args:
+    chdir: "{{ playbook_dir }}/git_folder_temp/{{ git_repo_name }}"
+  delegate_to: localhost
+  run_once: true
+
 - name: Create backup directory for device
   file:
-    path: "{{ playbook_dir }}/roles/config_drift/backup/{{ inventory_hostname }}"
+    path: "{{ playbook_dir }}/git_folder_temp/{{ git_repo_name }}/3.2-backup/{{ inventory_hostname }}"
     state: directory
+  run_once: true
   delegate_to: localhost
 
 - name: Backup running configuration
   copy:
     content: "{{ running_config.stdout }}"
-    dest: "{{ playbook_dir }}/roles/config_drift/backup/{{ inventory_hostname }}/{{ inventory_hostname }}_backup_{{ timestamp }}.txt"
+    dest: "{{ playbook_dir }}/git_folder_temp/{{ git_repo_name }}/3.2-backup/{{ inventory_hostname }}/{{ inventory_hostname }}_backup_{{ timestamp }}.txt"
+  run_once: true
   delegate_to: localhost
 
-- name: Create .ssh directory
+- name: add files
+  command: "git add . "
+  args:
+    chdir: "{{ playbook_dir }}/git_folder_temp/{{ git_repo_name }}"
+  delegate_to: localhost
+  run_once: true
+
+- name: commit
+  command: git commit -m "'{{ git_msg }}'"
+  args:
+    chdir: "{{ playbook_dir }}/git_folder_temp/{{ git_repo_name }}"
+  delegate_to: localhost
+  run_once: true
+
+- name: push
+  command: "git push --set-upstream origin {{ git_branch }}"
+  args:
+    chdir: "{{ playbook_dir }}/git_folder_temp/{{ git_repo_name }}"
+  delegate_to: localhost
+  run_once: true  
+
+- name: Clean up
   file:
-    path: "{{ playbook_dir }}/.ssh"
-    state: directory
-  delegate_to: localhost
-
-- name: Create temp file for SSH key
-  tempfile:
-    state: file
-    path: "{{ playbook_dir }}/.ssh"
-    suffix: _git_key
-  register: git_temp_file
-  delegate_to: localhost
-
-- name: Copy key to temp file
-  copy:
-    content: "{{ git_key }}"
-    dest: "{{ git_temp_file.path }}"
-    mode: '0600'
-  delegate_to: localhost
-  no_log: true
-
-- name: Initialize Git repository if not exists
-  command: git init
-  args:
-    chdir: "{{ playbook_dir }}/roles/config_drift/backup"
-    creates: "{{ playbook_dir }}/roles/config_drift/backup/.git"
-  delegate_to: localhost
-  register: git_init_result
-  changed_when: git_init_result.rc == 0
-
-- name: Set Git remote if not set
-  command: git remote add origin {{ git_url }}  # Ensure this is 'git@github.com:yourusername/repo.git'
-  args:
-    chdir: "{{ playbook_dir }}/roles/config_drift/backup"
-  delegate_to: localhost
-  register: git_remote_result
-  changed_when: git_remote_result.rc == 0
-  failed_when: git_remote_result.rc != 0 and not git_remote_result.stderr | regex_search('already exists')
-  ignore_errors: true  # Ignore if already set
-
-- name: Verify Git remote
-  command: git remote -v
-  args:
-    chdir: "{{ playbook_dir }}/roles/config_drift/backup"
-  delegate_to: localhost
-  register: git_remote_check
-  changed_when: false
-
-- name: Debug Git remote configuration
-  debug:
-    msg: "Remote: {{ git_remote_check.stdout }}"
-  delegate_to: localhost
-
-- name: Set Git user name
-  command: git config user.name "{{ git_username }}"
-  args:
-    chdir: "{{ playbook_dir }}/roles/config_drift/backup"
-  delegate_to: localhost
-
-- name: Set Git user email
-  command: git config user.email "{{ git_email }}"
-  args:
-    chdir: "{{ playbook_dir }}/roles/config_drift/backup"
-  delegate_to: localhost
-
-- name: Add backup files to Git
-  command: git add .
-  args:
-    chdir: "{{ playbook_dir }}/roles/config_drift/backup"
-  delegate_to: localhost
-  when: perform_backup | bool
-
-- name: Commit backup files to Git
-  command: git commit -m "Backup for {{ inventory_hostname }} at {{ timestamp }}"
-  args:
-    chdir: "{{ playbook_dir }}/roles/config_drift/backup"
-  delegate_to: localhost
-  register: git_commit_result
-  changed_when: git_commit_result.rc == 0
-  failed_when: git_commit_result.rc != 0 and git_commit_result.rc != 1
-
-- name: Rename default branch to main if necessary
-  command: git branch -M {{ git_branch }}
-  args:
-    chdir: "{{ playbook_dir }}/roles/config_drift/backup"
-  delegate_to: localhost
-  when: git_commit_result.changed
-  ignore_errors: true  # Ignore if branch already named correctly
-
-- name: Push backup to remote Git repository
-  command: git push -u origin {{ git_branch }}
-  args:
-    chdir: "{{ playbook_dir }}/roles/config_drift/backup"
-  delegate_to: localhost
-  environment:
-    GIT_SSH_COMMAND: "ssh -i {{ git_temp_file.path }} -o StrictHostKeyChecking=no -o Hostname=ssh.github.com -p 443"
-  when: 
-    - perform_backup | bool
-    - git_commit_result.changed
-  register: git_push_result
-  failed_when: git_push_result.rc != 0
-
-- name: Debug push failure if any
-  debug:
-    msg: "Push failed with: {{ git_push_result.stderr }}"
-  when: git_push_result.failed
-  delegate_to: localhost
-
-- name: Clean up temp SSH key file
-  file:
-    path: "{{ git_temp_file.path }}"
+    path: "{{ playbook_dir }}/git_folder_temp"
     state: absent
   delegate_to: localhost
+  run_once: true
   no_log: true
