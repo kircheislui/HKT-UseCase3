@@ -1,156 +1,265 @@
-  <html lang="en">
+---
+- name: Generate drift detection summary report
+  set_fact:
+    drift_summary_report: |
+      ================================================================================
+      CONFIGURATION DRIFT DETECTION REPORT
+      ================================================================================
+      Report Generated: {{ ansible_date_time.iso8601 | default(now().strftime('%Y-%m-%dT%H:%M:%SZ')) }}
+      Scan Date: {{ backup_date }}
+      Mode: {{ perform_remediation | ternary('CHECK + REMEDIATE', 'CHECK ONLY') }}
+      
+      OVERALL SUMMARY:
+      +-------------------------------------------+
+      | Total Devices Scanned: {{ '%2d' | format( (drift_results | default([]) | length | int) ) }}                |
+      | Devices with Drift:    {{ '%2d' | format( (drift_results | default([]) | selectattr('has_drift', 'equalto', true) | list | length | int) ) }}                |
+      | Devices Compliant:     {{ '%2d' | format( (drift_results | default([]) | selectattr('has_drift', 'equalto', false) | list | length | int) ) }}                |
+      | Failed Scans:          {{ '%2d' | format( (failed_devices | default([]) | length | int) ) }}                |
+      {% if perform_remediation | bool %}
+      | Devices Remediated:    {{ '%2d' | format( (remediated_devices | default([]) | length | int) ) }}                |
+      | Remediation Success:   {{ '%2d' | format( (drift_results | default([]) | selectattr('remediation_successful', 'defined') | selectattr('remediation_successful', 'equalto', true) | list | length | int) ) }}                |
+      | Restored Devices:      {{ '%2d' | format( (drift_results | default([]) | selectattr('restored', 'defined') | selectattr('restored', 'equalto', true) | list | length | int) ) }}                |
+      {% endif %}
+      +-------------------------------------------+
 
-  <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Configuration Drift Detection Report</title>
-      <style>
-          body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 1200px; margin: 0 auto; padding: 20px; }
-          h1, h2, h3 { color: #2c3e50; }
-          table { border-collapse: collapse; width: 100%; margin-bottom: 20px; }
-          th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-          th { background-color: #f2f2f2; }
-          .summary-table { width: auto; }
-          .summary-table td { padding: 10px; font-weight: bold; }
-          .device-section { border: 1px solid #ddd; border-radius: 5px; padding: 15px; margin-bottom: 20px; background-color: #f9f9f9; }
-          .status-compliant { color: green; font-weight: bold; }
-          .status-drift { color: red; font-weight: bold; }
-          .status-failed { color: orange; font-weight: bold; }
-          .config-item { margin-bottom: 10px; padding: 10px; border: 1px solid #eee; border-radius: 3px; }
-          .config-missing { background-color: #fff3cd; }
-          .config-different { background-color: #f8d7da; }
-          .config-status { font-weight: bold; color: #721c24; }
-          .footer { margin-top: 30px; font-size: 0.9em; color: #666; text-align: center; }
-          code { background-color: #f4f4f4; padding: 2px 4px; border-radius: 3px; }
-      </style>
-  </head>
-
-  <body>
-      <h1>Configuration Drift Detection Report</h1>
-      <p><strong>Report Generated:</strong> {{ ansible_date_time.iso8601 | default(now().strftime('%Y-%m-%dT%H:%M:%SZ')) }}</p>
-      <p><strong>Scan Date:</strong> {{ backup_date }}</p>
-      <p><strong>Mode:</strong> {{ perform_remediation | ternary('CHECK + REMEDIATE', 'CHECK ONLY') }}</p>
-
-      <h2>Overall Summary</h2>
-      <table class="summary-table">
-          <tr><td>Total Devices Scanned:</td><td>{{ drift_results | default([]) | length | int }}</td></tr>
-          <tr><td>Devices with Drift:</td><td>{{ drift_results | default([]) | selectattr('has_drift', 'equalto', true) | list | length | int }}</td></tr>
-          <tr><td>Devices Compliant:</td><td>{{ drift_results | default([]) | selectattr('has_drift', 'equalto', false) | list | length | int }}</td></tr>
-          <tr><td>Failed Scans:</td><td>{{ failed_devices | default([]) | length | int }}</td></tr>
-          {% if perform_remediation | bool %}
-          <tr><td>Devices Remediated:</td><td>{{ remediated_devices | default([]) | length | int }}</td></tr>
-          <tr><td>Remediation Success:</td><td>{{ drift_results | default([]) | selectattr('remediation_successful', 'defined') | selectattr('remediation_successful', 'equalto', true) | list | length | int }}</td></tr>
-          <tr><td>Restored Devices:</td><td>{{ drift_results | default([]) | selectattr('restored', 'defined') | selectattr('restored', 'equalto', true) | list | length | int }}</td></tr>
-          {% endif %}
-      </table>
-
-      <h2>Detailed Device Report</h2>
-      <table>
-          <thead>
-              <tr>
-                  <th>Device Name</th>
-                  <th>Network OS</th>
-                  <th>Baseline</th>
-                  <th>Checked</th>
-                  <th>Compliant</th>
-                  <th>Missing</th>
-                  <th>Different</th>
-                  <th>Status</th>
-              </tr>
-          </thead>
-          <tbody>
-              {% for result in drift_results | default([]) %}
-              {% set total_baseline = result.drift_details.baseline_lines | default(0) | int %}
-              {% set total_compliant = result.drift_details.compliant_configs | default([]) | length | int %}
-              {% set total_missing = result.drift_details.missing_configs | default([]) | length | int %}
-              {% set total_different = result.drift_details.different_configs | default([]) | length | int %}
-              <tr>
-                  <td>{{ result.hostname }}</td>
-                  <td>{{ result.network_os }}</td>
-                  <td>{{ result.baseline_found | ternary('FOUND', 'MISSING') }}</td>
-                  <td>{{ total_baseline }}</td>
-                  <td>{{ total_compliant }}</td>
-                  <td>{{ total_missing }}</td>
-                  <td>{{ total_different }}</td>
-                  <td class="{{ result.has_drift | ternary('status-drift', 'status-compliant') if result.has_drift is defined else 'status-failed' }}">
-                      {{ result.has_drift | ternary('DRIFT', 'OK') if result.has_drift is defined else 'FAILED' }}
-                  </td>
-              </tr>
-              {% endfor %}
-          </tbody>
-      </table>
-
-      <h2>Drift Details by Device</h2>
+      DETAILED DEVICE REPORT:
+      +------------------+----------------+-------------+----------+----------+----------+----------+----------+
+      | Device Name      | Network OS     | Baseline    | Checked  | Compliant| Missing  | Different| Status   |
+      +------------------+----------------+-------------+----------+----------+----------+----------+----------+
       {% for result in drift_results | default([]) %}
-      <div class="device-section">
-          <h3>Device: {{ result.hostname }} ({{ result.network_os }})</h3>
-          <p><strong>Vendor:</strong> {{ result.vendor }}</p>
-          <p><strong>Status:</strong> <span class="{{ result.has_drift | ternary('status-drift', 'status-compliant') if result.has_drift is defined else 'status-failed' }}">
-              {{ result.has_drift | ternary('DRIFT DETECTED', 'COMPLIANT') if result.has_drift is defined else 'SCAN FAILED' }}
-          </span></p>
-          {% if result.error is defined %}
-          <p><strong>Error:</strong> {{ result.error }}</p>
-          {% endif %}
-          <p><strong>Baseline:</strong> {{ result.baseline_found | ternary('Found', 'Not Found') }}</p>
-          {% if result.baseline_found %}
-          <p><strong>Key Configs Checked:</strong> {{ result.drift_details.baseline_lines | default(0) }}</p>
-          <p><strong>Compliant:</strong> {{ result.drift_details.compliant_configs | default([]) | length }}</p>
-          <p><strong>Missing:</strong> {{ result.drift_details.missing_configs | default([]) | length }}</p>
-          <p><strong>Different:</strong> {{ result.drift_details.different_configs | default([]) | length }}</p>
-          {% if perform_remediation | bool %}
-          {% if result.remediated %}
-          <p><strong>Remediation:</strong> {{ result.remediation_successful | ternary('Successful', 'Partial') }}</p>
-          <p><strong>Post-Remediation:</strong> {{ result.post_remediation_drift.summary | default('N/A') }}</p>
-          {% elif result.restored %}
-          <p><strong>Restoration:</strong> Performed due to remediation failure</p>
-          {% endif %}
-          {% endif %}
-          {% endif %}
-          
-          {% if result.drift_details.compliant_configs | default([]) | length > 0 %}
-          <h4>Compliant Configurations:</h4>
-          {% for config in result.drift_details.compliant_configs | default([]) | list | first(10) %}
-          <code>{{ config }}</code><br>
-          {% endfor %}
-          {% if result.drift_details.compliant_configs | default([]) | length > 10 %}
-          <em>... and {{ result.drift_details.compliant_configs | default([]) | length - 10 }} more</em>
-          {% endif %}
-          {% endif %}
-          
-          {% if result.drift_details.missing_configs | default([]) | length > 0 %}
-          <h4>Missing Configurations:</h4>
-          {% for config in result.drift_details.missing_configs | default([]) %}
-          <div class="config-item config-missing">
-              [MISSING] <code>{{ config }}</code>
-          </div>
-          {% endfor %}
-          {% endif %}
-          
-          {% if result.drift_details.different_configs | default([]) | length > 0 %}
-          <h4>Different Configurations:</h4>
-          {% for diff in result.drift_details.different_configs | default([]) %}
-          <div class="config-item config-different">
-              [DIFFERENT] {{ diff.config_type }}<br>
-              Expected: <code>{{ diff.baseline }}</code><br>
-              Current: <code>{{ diff.running }}</code>
-          </div>
-          {% endfor %}
-          {% endif %}
-          {% endif %}
-      </div>
+      {% set total_baseline = result.drift_details.baseline_lines | default(0) | int %}
+      {% set total_compliant = result.drift_details.compliant_configs | default([]) | length | int %}
+      {% set total_missing = result.drift_details.missing_configs | default([]) | length | int %}
+      {% set total_different = result.drift_details.different_configs | default([]) | length | int %}
+      | {{ "%-16s" | format(result.hostname[:16]) }} | {{ "%-14s" | format(result.network_os[:14]) }} | {{ "%-11s" | format(result.baseline_found | ternary('FOUND', 'MISSING')) }} | {{ "%8d" | format(total_baseline) }} | {{ "%8d" | format(total_compliant) }} | {{ "%8d" | format(total_missing) }} | {{ "%8d" | format(total_different) }} | {{ "%-8s" | format(result.has_drift | ternary('DRIFT', 'OK') if result.has_drift is defined else 'FAILED' ) }} |
+      {% endfor %}
+      +------------------+----------------+-------------+----------+----------+----------+----------+----------+
+
+      DRIFT DETAILS BY DEVICE:
+      ================================================================================
+      {% for result in drift_results | default([]) %}
+      Device: {{ result.hostname }} ({{ result.network_os }})
+      Vendor: {{ result.vendor }}
+      Status: {{ result.has_drift | ternary('DRIFT DETECTED', 'COMPLIANT') if result.has_drift is defined else 'SCAN FAILED' }}
+      {% if result.error is defined %}
+      Error: {{ result.error }}
+      {% endif %}
+      Baseline: {{ result.baseline_found | ternary('Found', 'Not Found') }}
+      {% if result.baseline_found %}
+      Key Configs Checked: {{ result.drift_details.baseline_lines | default(0) }}
+      Compliant: {{ result.drift_details.compliant_configs | default([]) | length }}
+      Missing: {{ result.drift_details.missing_configs | default([]) | length }}
+      Different: {{ result.drift_details.different_configs | default([]) | length }}
+      {% if perform_remediation | bool %}
+      {% if result.remediated %}
+      Remediation: {{ result.remediation_successful | ternary('Successful', 'Partial') }}
+      Post-Remediation: {{ result.post_remediation_drift.summary | default('N/A') }}
+      {% elif result.restored %}
+      Restoration: Performed due to remediation failure
+      {% endif %}
+      {% endif %}
+      {% endif %}
+      
+      {% if result.has_drift %}
+      Missing Configurations ({{ result.drift_details.missing_configs | default([]) | length }}):
+      {% for config in result.drift_details.missing_configs %}
+      [MISSING] {{ config }}
+         Status: NOT FOUND on device
+         Action: {{ perform_remediation | ternary('Remediated', 'NEEDS TO BE ADDED') if not result.restored else 'Restored' }}
+      {% endfor %}
+      
+      Configuration Differences ({{ result.drift_details.different_configs | default([]) | length }}):
+      {% for diff in result.drift_details.different_configs %}
+      [DIFFERENT] {{ diff.config_type }}
+         Baseline: {{ diff.baseline }}
+         Running: {{ diff.running }}
+         Action: {{ perform_remediation | ternary('Remediated', 'Needs update') if not result.restored else 'Restored' }}
+      {% endfor %}
+      {% endif %}
+      ================================================================================
       {% endfor %}
 
-      <h2>Recommendations</h2>
+      RECOMMENDATIONS:
+      ================================================================================
       {% if (drift_results | default([]) | selectattr('has_drift', 'equalto', true) | list | length | int) > 0 %}
-      <p class="status-drift">WARNING: Drift detected on {{ drift_results | default([]) | selectattr('has_drift', 'equalto', true) | list | length | int }} device(s)</p>
-      <p>ACTION: To automatically remediate, set <code>perform_remediation: true</code></p>
+      WARNING: Drift detected on {{ drift_results | default([]) | selectattr('has_drift', 'equalto', true) | list | length | int }} device(s)
+      ACTION: To automatically remediate, set perform_remediation: true
       {% else %}
-      <p class="status-compliant">SUCCESS: All devices compliant with baseline</p>
+      SUCCESS: All devices compliant with baseline
       {% endif %}
+      ================================================================================
+      
+      Report generated by Ansible Configuration Drift Detection System
+      ================================================================================
+  delegate_to: localhost
 
-      <div class="footer">
-          <p>Report generated by Ansible Configuration Drift Detection System</p>
-      </div>
-  </body>
+- name: Generate HTML report for email
+  set_fact:
+    html_email_report: |
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Configuration Drift Detection Report</title>
+          <style>
+              body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 1200px; margin: 0 auto; padding: 20px; }
+              h1, h2, h3 { color: #2c3e50; }
+              table { border-collapse: collapse; width: 100%; margin-bottom: 20px; }
+              th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+              th { background-color: #f2f2f2; }
+              .summary-table { width: auto; }
+              .summary-table td { padding: 10px; font-weight: bold; }
+              .device-section { border: 1px solid #ddd; border-radius: 5px; padding: 15px; margin-bottom: 20px; background-color: #f9f9f9; }
+              .status-compliant { color: green; font-weight: bold; }
+              .status-drift { color: red; font-weight: bold; }
+              .status-failed { color: orange; font-weight: bold; }
+              .config-item { margin-bottom: 10px; padding: 10px; border: 1px solid #eee; border-radius: 3px; }
+              .config-missing { background-color: #fff3cd; }
+              .config-different { background-color: #f8d7da; }
+              .config-status { font-weight: bold; color: #721c24; }
+              .footer { margin-top: 30px; font-size: 0.9em; color: #666; text-align: center; }
+              code { background-color: #f4f4f4; padding: 2px 4px; border-radius: 3px; }
+          </style>
+      </head>
+      <body>
+          <h1>Configuration Drift Detection Report</h1>
+          <p><strong>Report Generated:</strong> {{ ansible_date_time.iso8601 | default(now().strftime('%Y-%m-%dT%H:%M:%SZ')) }}</p>
+          <p><strong>Scan Date:</strong> {{ backup_date }}</p>
+          <p><strong>Mode:</strong> {{ perform_remediation | ternary('CHECK + REMEDIATE', 'CHECK ONLY') }}</p>
 
-  </html>
+          <h2>Overall Summary</h2>
+          <table class="summary-table">
+              <tr><td>Total Devices Scanned:</td><td>{{ drift_results | default([]) | length | int }}</td></tr>
+              <tr><td>Devices with Drift:</td><td>{{ drift_results | default([]) | selectattr('has_drift', 'equalto', true) | list | length | int }}</td></tr>
+              <tr><td>Devices Compliant:</td><td>{{ drift_results | default([]) | selectattr('has_drift', 'equalto', false) | list | length | int }}</td></tr>
+              <tr><td>Failed Scans:</td><td>{{ failed_devices | default([]) | length | int }}</td></tr>
+              {% if perform_remediation | bool %}
+              <tr><td>Devices Remediated:</td><td>{{ remediated_devices | default([]) | length | int }}</td></tr>
+              <tr><td>Remediation Success:</td><td>{{ drift_results | default([]) | selectattr('remediation_successful', 'defined') | selectattr('remediation_successful', 'equalto', true) | list | length | int }}</td></tr>
+              <tr><td>Restored Devices:</td><td>{{ drift_results | default([]) | selectattr('restored', 'defined') | selectattr('restored', 'equalto', true) | list | length | int }}</td></tr>
+              {% endif %}
+          </table>
+
+          <h2>Detailed Device Report</h2>
+          <table>
+              <thead>
+                  <tr>
+                      <th>Device Name</th>
+                      <th>Network OS</th>
+                      <th>Baseline</th>
+                      <th>Checked</th>
+                      <th>Compliant</th>
+                      <th>Missing</th>
+                      <th>Different</th>
+                      <th>Status</th>
+                  </tr>
+              </thead>
+              <tbody>
+                  {% for result in drift_results | default([]) %}
+                  {% set total_baseline = result.drift_details.baseline_lines | default(0) | int %}
+                  {% set total_compliant = result.drift_details.compliant_configs | default([]) | length | int %}
+                  {% set total_missing = result.drift_details.missing_configs | default([]) | length | int %}
+                  {% set total_different = result.drift_details.different_configs | default([]) | length | int %}
+                  <tr>
+                      <td>{{ result.hostname }}</td>
+                      <td>{{ result.network_os }}</td>
+                      <td>{{ result.baseline_found | ternary('FOUND', 'MISSING') }}</td>
+                      <td>{{ total_baseline }}</td>
+                      <td>{{ total_compliant }}</td>
+                      <td>{{ total_missing }}</td>
+                      <td>{{ total_different }}</td>
+                      <td class="{{ result.has_drift | ternary('status-drift', 'status-compliant') if result.has_drift is defined else 'status-failed' }}">
+                          {{ result.has_drift | ternary('DRIFT', 'OK') if result.has_drift is defined else 'FAILED' }}
+                      </td>
+                  </tr>
+                  {% endfor %}
+              </tbody>
+          </table>
+
+          <h2>Drift Details by Device</h2>
+          {% for result in drift_results | default([]) %}
+          <div class="device-section">
+              <h3>Device: {{ result.hostname }} ({{ result.network_os }})</h3>
+              <p><strong>Vendor:</strong> {{ result.vendor }}</p>
+              <p><strong>Status:</strong> <span class="{{ result.has_drift | ternary('status-drift', 'status-compliant') if result.has_drift is defined else 'status-failed' }}">
+                  {{ result.has_drift | ternary('DRIFT DETECTED', 'COMPLIANT') if result.has_drift is defined else 'SCAN FAILED' }}
+              </span></p>
+              {% if result.error is defined %}
+              <p><strong>Error:</strong> {{ result.error }}</p>
+              {% endif %}
+              <p><strong>Baseline:</strong> {{ result.baseline_found | ternary('Found', 'Not Found') }}</p>
+              {% if result.baseline_found %}
+              <p><strong>Key Configs Checked:</strong> {{ result.drift_details.baseline_lines | default(0) }}</p>
+              <p><strong>Compliant:</strong> {{ result.drift_details.compliant_configs | default([]) | length }}</p>
+              <p><strong>Missing:</strong> {{ result.drift_details.missing_configs | default([]) | length }}</p>
+              <p><strong>Different:</strong> {{ result.drift_details.different_configs | default([]) | length }}</p>
+              {% if perform_remediation | bool %}
+              {% if result.remediated %}
+              <p><strong>Remediation:</strong> {{ result.remediation_successful | ternary('Successful', 'Partial') }}</p>
+              <p><strong>Post-Remediation:</strong> {{ result.post_remediation_drift.summary | default('N/A') }}</p>
+              {% elif result.restored %}
+              <p><strong>Restoration:</strong> Performed due to remediation failure</p>
+              {% endif %}
+              {% endif %}
+              {% endif %}
+              
+              {% if result.drift_details.compliant_configs | default([]) | length > 0 %}
+              <h4>Compliant Configurations:</h4>
+              {% for config in result.drift_details.compliant_configs | default([]) | list | first(10) %}
+              <code>{{ config }}</code><br>
+              {% endfor %}
+              {% if result.drift_details.compliant_configs | default([]) | length > 10 %}
+              <em>... and {{ result.drift_details.compliant_configs | default([]) | length - 10 }} more</em>
+              {% endif %}
+              {% endif %}
+              
+              {% if result.drift_details.missing_configs | default([]) | length > 0 %}
+              <h4>Missing Configurations:</h4>
+              {% for config in result.drift_details.missing_configs | default([]) %}
+              <div class="config-item config-missing">
+                  [MISSING] <code>{{ config }}</code>
+              </div>
+              {% endfor %}
+              {% endif %}
+              
+              {% if result.drift_details.different_configs | default([]) | length > 0 %}
+              <h4>Different Configurations:</h4>
+              {% for diff in result.drift_details.different_configs | default([]) %}
+              <div class="config-item config-different">
+                  [DIFFERENT] {{ diff.config_type }}<br>
+                  Expected: <code>{{ diff.baseline }}</code><br>
+                  Current: <code>{{ diff.running }}</code>
+              </div>
+              {% endfor %}
+              {% endif %}
+              {% endif %}
+          </div>
+          {% endfor %}
+
+          <h2>Recommendations</h2>
+          {% if (drift_results | default([]) | selectattr('has_drift', 'equalto', true) | list | length | int) > 0 %}
+          <p class="status-drift">WARNING: Drift detected on {{ drift_results | default([]) | selectattr('has_drift', 'equalto', true) | list | length | int }} device(s)</p>
+          <p>ACTION: To automatically remediate, set <code>perform_remediation: true</code></p>
+          {% else %}
+          <p class="status-compliant">SUCCESS: All devices compliant with baseline</p>
+          {% endif %}
+
+          <div class="footer">
+              <p>Report generated by Ansible Configuration Drift Detection System</p>
+          </div>
+      </body>
+      </html>
+  delegate_to: localhost
+
+- name: Display comprehensive drift report in AAP
+  debug:
+    msg: "{{ drift_summary_report.split('\n') }}"
+  delegate_to: localhost
+
+- name: Save HTML report to file
+  copy:
+    content: "{{ html_email_report }}"
+    dest: "{{ report_directory }}/drift_report_{{ backup_date }}_{{ timestamp }}.html"
+  delegate_to: localhost
+  when: save_html_report | default(true) | bool
